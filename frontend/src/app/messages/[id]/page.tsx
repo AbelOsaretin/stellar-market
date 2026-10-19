@@ -2,11 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Send, ArrowLeft, User, Briefcase, Paperclip, MessageSquare } from "lucide-react";
+import { Send, ArrowLeft, Briefcase, Paperclip, MessageSquare } from "lucide-react";
 import axios from "axios";
 import { Message } from "@/types";
 import MessageBubble from "@/components/MessageBubble";
-import Image from "next/image";
 import { useAuth } from "@/context/AuthContext";
 import { useSocket } from "@/context/SocketContext";
 import Avatar from "@/components/Avatar";
