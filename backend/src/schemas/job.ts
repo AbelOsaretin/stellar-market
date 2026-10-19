@@ -16,7 +16,10 @@ export const createJobSchema = z.object({
     .string()
     .min(20, "Description must be at least 20 characters long")
     .max(5000, "Description must be less than 5000 characters"),
-  budget: z.number().min(platformMinimumBudget, minimumBudgetMessage),
+  budget: z.number().refine((budget) => budget >= platformMinimumBudget, {
+    message: minimumBudgetMessage,
+    params: { code: "BudgetBelowMinimum" },
+  }),
   skills: z
     .array(z.string())
     .min(1, "At least one skill is required")

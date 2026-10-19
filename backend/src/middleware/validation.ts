@@ -34,7 +34,8 @@ export const validate = (schema: {
           (issue) =>
             issue.path.length === 1 &&
             issue.path[0] === "budget" &&
-            issue.message.startsWith("Budget must be at least "),
+            issue.code === "custom" &&
+            issue.params?.code === "BudgetBelowMinimum",
         );
         if (budgetMinimumError) {
           res.status(422).json({
