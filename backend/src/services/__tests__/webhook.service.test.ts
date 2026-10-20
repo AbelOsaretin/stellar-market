@@ -60,6 +60,7 @@ jest.mock("../../lib/logger", () => ({
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import { WebhookService } from "../webhook.service";
+import { logger } from "../../lib/logger";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function computeExpectedSignature(secret: string, body: string): string {
@@ -209,5 +210,31 @@ describe("WebhookService — supported events", () => {
 
   it("rejects unknown event types", () => {
     expect(WebhookService.isSupportedEvent("unknown.event")).toBe(false);
+  });
+});
+
+describe("WebhookService — unexpected failures inside deliver() (#1636)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("resolves and logs when the DB lookup at the top of deliver() rejects", async () => {
+    mockFindUnique.mockRejectedValueOnce(new Error("db unavailable"));
+
+    await expect(WebhookService.deliver("del-1")).resolves.toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryId: "del-1" }),
+      expect.any(String),
+    );
+  });
+
+  it("resolves and logs when the DB update at the bottom of deliver() rejects", async () => {
+    mockFindUnique.mockResolvedValueOnce({ ...mockDelivery });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    mockUpdate.mockRejectedValueOnce(new Error("db write failed"));
+
+    await expect(WebhookService.deliver("del-1")).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
   });
 });
