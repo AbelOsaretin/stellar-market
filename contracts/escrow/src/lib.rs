@@ -1419,6 +1419,13 @@ impl EscrowContract {
             return Err(EscrowError::GovernanceRequired);
         }
 
+        // Event contract: every successful action is represented by the generic
+        // `msig/executed` event below. Dedicated domain events are additionally
+        // emitted for Pause, Unpause, EmergencyWithdraw, and ConfigureGovernance.
+        // SetFeeBps, SetTreasury, AddSigner, RemoveSigner, ChangeThreshold, and
+        // RotateSigner intentionally have no dedicated event; indexers should
+        // decode those actions from the generic event rather than expect a
+        // second action-specific event schema.
         match proposal.action.clone() {
             AdminAction::Pause => {
                 env.storage().instance().set(&DataKey::Paused, &true);
@@ -2642,6 +2649,30 @@ impl EscrowContract {
         Ok(total_released)
     }
 
+    /// Return when the milestone was submitted, or `None` if it has not been submitted
+    /// or the submission timestamp is no longer active.
+    pub fn get_milestone_submitted_at(
+        env: Env,
+        job_id: u64,
+        milestone_id: u32,
+    ) -> Option<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MilestoneSubmittedAt(job_id, milestone_id))
+    }
+
+    /// Return when inactivity auto-approval will become eligible, or `None` if no
+    /// inactivity timer is currently active for the milestone.
+    pub fn get_inactivity_auto_approve_at(
+        env: Env,
+        job_id: u64,
+        milestone_id: u32,
+    ) -> Option<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InactivityAutoApproveAt(job_id, milestone_id))
+    }
+
     /// After a milestone is submitted, allow either party to trigger an inactivity-based
     /// auto-approval flow when the client is unresponsive for a threshold duration.
     pub fn trigger_inactivity_extension(
@@ -3568,7 +3599,8 @@ impl EscrowContract {
     /// * `NotAdmin`           — caller is not a registered signer
     /// * `JobNotFound`        — job does not exist
     /// * `InvalidStatus`      — job is in a terminal state (Completed, Cancelled, Expired, Created)
-    /// * `InsufficientFunds`  — amount <= 0 or amount > remaining locked balance
+    /// * `InvalidAmount`      — amount is zero or negative
+    /// * `InsufficientFunds`  — amount exceeds the remaining locked balance
     pub fn partial_refund(
         env: Env,
         caller: Address,
@@ -3609,7 +3641,11 @@ impl EscrowContract {
             .sum();
         let remaining = job.total_amount - approved_amount;
 
-        if amount <= 0 || amount > remaining {
+        if amount <= 0 {
+            return Err(EscrowError::InvalidAmount);
+        }
+
+        if amount > remaining {
             return Err(EscrowError::InsufficientFunds);
         }
 
@@ -4620,6 +4656,12 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::SubAssignment(job_id, milestone_id))
+    }
+
+    /// Return the cumulative amount paid to the freelancer for a milestone.
+    /// Returns `0` if no amount has been disbursed.
+    pub fn get_milestone_disbursed(env: Env, job_id: u64, milestone_id: u32) -> i128 {
+        get_milestone_disbursed(&env, job_id, milestone_id)
     }
 
     /// Get job details by ID.

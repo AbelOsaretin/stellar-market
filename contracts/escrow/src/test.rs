@@ -3740,10 +3740,12 @@ fn test_release_partial_then_full_remainder() {
 
     contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
+    assert_eq!(contract.get_milestone_disbursed(&job_id, &0), 0);
 
     // First partial payment
     contract.release_partial_payment(&job_id, &0, &partial, &client_addr, &0);
     assert_eq!(token.balance(&freelancer), partial);
+    assert_eq!(contract.get_milestone_disbursed(&job_id, &0), partial);
 
     // Second partial payment clears the rest
     let remaining = amount - partial;
@@ -3753,6 +3755,7 @@ fn test_release_partial_then_full_remainder() {
     assert_eq!(job.milestones.get(0).unwrap().status, MilestoneStatus::Approved);
     assert_eq!(job.status, JobStatus::InProgress);
     assert_eq!(token.balance(&freelancer), amount);
+    assert_eq!(contract.get_milestone_disbursed(&job_id, &0), amount);
 }
 
 #[test]
@@ -5103,6 +5106,7 @@ fn test_partial_refund_balance_tracked_accurately() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #5)")] // InsufficientFunds
 fn test_partial_refund_fails_over_refund() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5128,8 +5132,36 @@ fn test_partial_refund_fails_over_refund() {
     contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // No milestones approved, remaining = 500. Attempt to refund 600 > 500 → should fail.
-    let result = contract.try_partial_refund(&admin, &job_id, &600, &0);
-    assert!(result.is_err());
+    contract.partial_refund(&admin, &job_id, &600, &0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #24)")] // InvalidAmount
+fn test_partial_refund_fails_non_positive_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, client_addr, freelancer, token, admin) = setup_test(&env);
+
+    let milestones = vec![
+        &env,
+        (String::from_str(&env, "M1"), 500_i128, JOB_DEADLINE),
+    ];
+
+    let job_id = contract.create_job(
+        &client_addr,
+        &freelancer,
+        &token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+
+    contract.fund_job(&job_id, &client_addr, &0, &0);
+
+    contract.partial_refund(&admin, &job_id, &0, &0);
 }
 
 #[test]
@@ -8064,6 +8096,41 @@ fn test_emergency_withdraw_all_deferred_approved_all_to_freelancer() {
 //   - Contract paused → EmergencyWithdraw.
 // Expected: freelancer gets 0 extra (already received 200), recipient gets 300.
 // -----------------------------------------------------------------
+#[test]
+fn test_inactivity_timestamp_getters_follow_storage_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, _token_addr, _admin, job_id) =
+        setup_emergency_withdraw_job(&env);
+
+    assert_eq!(escrow.get_milestone_submitted_at(&job_id, &0), None);
+    assert_eq!(escrow.get_inactivity_auto_approve_at(&job_id, &0), None);
+
+    escrow.submit_milestone(&job_id, &0, &freelancer);
+    assert_eq!(escrow.get_milestone_submitted_at(&job_id, &0), Some(1000));
+    assert_eq!(escrow.get_inactivity_auto_approve_at(&job_id, &0), None);
+
+    let trigger_time = 1000 + INACTIVITY_THRESHOLD_SECS + 1;
+    env.ledger().with_mut(|l| l.timestamp = trigger_time);
+    let auto_approve_at = trigger_time + INACTIVITY_GRACE_SECS;
+    escrow.trigger_inactivity_extension(&job_id, &0, &freelancer);
+
+    assert_eq!(
+        escrow.get_milestone_submitted_at(&job_id, &0),
+        Some(1000)
+    );
+    assert_eq!(
+        escrow.get_inactivity_auto_approve_at(&job_id, &0),
+        Some(auto_approve_at)
+    );
+
+    escrow.approve_milestone(&job_id, &0, &client_addr);
+    assert_eq!(escrow.get_milestone_submitted_at(&job_id, &0), None);
+    assert_eq!(escrow.get_inactivity_auto_approve_at(&job_id, &0), None);
+}
+
 #[test]
 fn test_emergency_withdraw_no_double_pay_after_inactivity_approval() {
     let env = Env::default();
