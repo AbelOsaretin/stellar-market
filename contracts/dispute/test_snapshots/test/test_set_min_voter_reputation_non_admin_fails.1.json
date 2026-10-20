@@ -131,6 +131,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ReputationSlashBps"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 500
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "SlashAmount"
                             }
                           ]
@@ -413,7 +425,7 @@
             ],
             "data": {
               "error": {
-                "contract": 2
+                "contract": 12
               }
             }
           }
@@ -434,7 +446,7 @@
               },
               {
                 "error": {
-                  "contract": 2
+                  "contract": 12
                 }
               }
             ],
@@ -459,7 +471,7 @@
               },
               {
                 "error": {
-                  "contract": 2
+                  "contract": 12
                 }
               }
             ],
@@ -501,7 +513,7 @@
               },
               {
                 "error": {
-                  "contract": 2
+                  "contract": 12
                 }
               }
             ],

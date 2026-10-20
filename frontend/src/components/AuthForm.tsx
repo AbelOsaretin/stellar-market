@@ -1,32 +1,68 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useWallet } from "@/context/WalletContext";
-import { Loader2, Mail, Lock, User as UserIcon, Wallet, ShieldCheck } from "lucide-react";
+import { Loader2, Mail, Lock, User as UserIcon, Wallet, ShieldCheck, Gift, ChevronDown } from "lucide-react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 
 interface AuthFormProps {
   type: "login" | "register";
 }
 
 export default function AuthForm({ type }: AuthFormProps) {
-  const { login, register } = useAuth();
-  const { address, connect, isConnecting, error: walletError } = useWallet();
+  const { login, user, isLoading: authLoading } = useAuth();
+  const { address, connect, isConnecting, error: walletError, signMessage } = useWallet();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [referralOpen, setReferralOpen] = useState(false);
+
+  // Nothing here checked whether the visitor was already logged in — the
+  // navbar (a separate, global component reading the same session) would
+  // show them as signed in while this form still asked them to log in
+  // again, with no relationship between the two. Redirect away once we know
+  // for sure (authLoading false) rather than mid-flow, so this doesn't fire
+  // while a fresh login/register submission is still in progress.
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/dashboard");
+    }
+  }, [authLoading, user, router]);
 
   // 2FA state
   const [twoFactorPending, setTwoFactorPending] = useState(false);
   const [tempToken, setTempToken] = useState("");
   const [totpCode, setTotpCode] = useState("");
 
+  // Post-registration state — no session is issued until the user clicks
+  // the verification link, so this just shows a "check your email" screen
+  // instead of the form.
+  const [checkEmailFor, setCheckEmailFor] = useState<string | null>(null);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
+
   const [formData, setFormData] = useState({
     username: "",
     email: "",
     password: "",
+    confirmPassword: "",
     role: "FREELANCER" as "CLIENT" | "FREELANCER",
+    referralCode: "",
   });
+
+  const passwordsMatch = type !== "register" || formData.password === formData.confirmPassword;
+
+  // Auto-fill referral code from ?ref= query param
+  useEffect(() => {
+    if (type !== "register") return;
+    const ref = searchParams?.get("ref");
+    if (ref) {
+      setFormData((prev) => ({ ...prev, referralCode: ref }));
+      setReferralOpen(true);
+    }
+  }, [type, searchParams]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -37,7 +73,7 @@ export default function AuthForm({ type }: AuthFormProps) {
     setIsLoading(true);
     setError(null);
 
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
     try {
       const response = await fetch(`${API}/auth/2fa/validate`, {
@@ -61,7 +97,7 @@ export default function AuthForm({ type }: AuthFormProps) {
     setIsLoading(true);
     setError(null);
 
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
     try {
       if (type === "login") {
@@ -75,7 +111,7 @@ export default function AuthForm({ type }: AuthFormProps) {
         });
 
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || "Login failed");
+        if (!response.ok) throw new Error(data.error || data.message || "Login failed");
 
         if (data.requiresTwoFactor) {
           setTwoFactorPending(true);
@@ -85,21 +121,32 @@ export default function AuthForm({ type }: AuthFormProps) {
 
         login(data.token, data.user);
       } else {
+        if (formData.password !== formData.confirmPassword) {
+          setError("Passwords do not match");
+          setIsLoading(false);
+          return;
+        }
+        const body: Record<string, string> = {
+          name: formData.username,
+          email: formData.email,
+          password: formData.password,
+          role: formData.role,
+        };
+        if (address) {
+          body.stellarAddress = address;
+        }
+        if (formData.referralCode.trim()) {
+          body.referralCode = formData.referralCode.trim();
+        }
         const response = await fetch(`${API}/auth/register`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: formData.username,
-            email: formData.email,
-            password: formData.password,
-            stellarAddress: address,
-            role: formData.role,
-          }),
+          body: JSON.stringify(body),
         });
 
         const data = await response.json();
-        if (!response.ok) throw new Error(data.message || "Registration failed");
-        register(data.token, data.user);
+        if (!response.ok) throw new Error(data.error || data.message || "Registration failed");
+        setCheckEmailFor(formData.email);
       }
     } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
       setError(err.message);
@@ -108,33 +155,126 @@ export default function AuthForm({ type }: AuthFormProps) {
     }
   };
 
+  const handleResendVerification = async () => {
+    if (!checkEmailFor) return;
+    setResendState("sending");
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
+    try {
+      await fetch(`${API}/auth/resend-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: checkEmailFor }),
+      });
+    } finally {
+      setResendState("sent");
+    }
+  };
+
+  const handleWalletLogin = async () => {
+    setIsLoading(true);
+    setError(null);
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
+
+    try {
+      let publicKey = address;
+      if (!address) {
+        const connectedAddress = await connect();
+        if (!connectedAddress) {
+          setError("Connect a wallet before continuing.");
+          return;
+        }
+        publicKey = connectedAddress;
+      }
+      if (!publicKey) {
+        setError("Connect a wallet before continuing.");
+        return;
+      }
+      const message = `Sign in to StellarMarket with ${publicKey} at ${Date.now()}`;
+      const signature = await signMessage(message);
+      const response = await fetch(`${API}/auth/wallet/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicKey, message, signature }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || data.message || "Wallet login failed");
+      login(data.token, data.user);
+    } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (authLoading || user) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 size={32} className="animate-spin text-stellar-blue" />
+      </div>
+    );
+  }
+
+  if (checkEmailFor) {
+    return (
+      <div className="w-full max-w-md p-8 bg-theme-card border border-theme-border rounded-2xl shadow-xl">
+        <div className="text-center mb-6">
+          <Mail size={48} className="mx-auto mb-4 text-stellar-blue" />
+          <h1 className="text-2xl font-bold text-theme-heading mb-2">Check your email</h1>
+          <p className="text-theme-text">
+            We sent a verification link to{" "}
+            <span className="font-medium text-theme-heading">{checkEmailFor}</span>. Click it to finish
+            creating your account and log in.
+          </p>
+        </div>
+
+        <button
+          onClick={handleResendVerification}
+          disabled={resendState === "sending"}
+          className="w-full btn-secondary py-3 flex items-center justify-center gap-2 font-semibold disabled:opacity-60"
+        >
+          {resendState === "sending" ? <Loader2 size={18} className="animate-spin" /> : null}
+          {resendState === "sent" ? "Verification email sent" : "Resend verification email"}
+        </button>
+
+        <Link
+          href="/auth/login"
+          className="block w-full text-center mt-4 text-sm text-stellar-blue hover:underline"
+        >
+          Back to login
+        </Link>
+      </div>
+    );
+  }
+
   if (twoFactorPending) {
     return (
-      <div className="w-full max-w-md p-8 bg-dark-card border border-dark-border rounded-2xl shadow-xl">
+      <div className="w-full max-w-md p-8 bg-theme-card border border-theme-border rounded-2xl shadow-xl">
         <div className="text-center mb-8">
           <ShieldCheck size={48} className="mx-auto mb-4 text-stellar-blue" />
-          <h1 className="text-3xl font-bold text-dark-heading mb-2">Two-Factor Authentication</h1>
-          <p className="text-dark-muted">
+          <h1 className="text-3xl font-bold text-theme-heading mb-2">Two-Factor Authentication</h1>
+          <p className="text-theme-text">
             Enter the 6-digit code from your authenticator app, or an 8-character recovery code.
           </p>
         </div>
 
         <form onSubmit={handleTwoFactorSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-dark-text mb-1">
+            <label htmlFor="auth-2fa-code" className="block text-sm font-medium text-theme-text mb-1">
               Verification Code
             </label>
             <div className="relative">
               <ShieldCheck
                 size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-muted"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
               />
               <input
+                id="auth-2fa-code"
                 type="text"
                 required
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:ring-2 focus:ring-stellar-blue outline-none transition-all text-dark-text text-center tracking-widest"
+                className="w-full pl-10 pr-4 py-2 bg-theme-bg border border-theme-border rounded-lg focus:ring-2 focus:ring-stellar-blue outline-none transition-all text-theme-text text-center tracking-widest"
                 placeholder="000000 or recovery"
                 autoFocus
                 autoComplete="one-time-code"
@@ -144,7 +284,7 @@ export default function AuthForm({ type }: AuthFormProps) {
           </div>
 
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+            <div className="p-3 bg-theme-error/10 border border-theme-error/20 rounded-lg text-theme-error text-sm">
               {error}
             </div>
           )}
@@ -165,7 +305,7 @@ export default function AuthForm({ type }: AuthFormProps) {
               setTotpCode("");
               setError(null);
             }}
-            className="w-full py-2 text-dark-muted hover:text-dark-text text-sm transition-colors"
+            className="w-full py-2 text-theme-text hover:text-theme-heading text-sm transition-colors"
           >
             Back to login
           </button>
@@ -191,7 +331,7 @@ export default function AuthForm({ type }: AuthFormProps) {
         {type === "register" && (
           <>
             <div>
-              <label className="block text-sm font-medium text-theme-text mb-1">
+              <label htmlFor="auth-username" className="block text-sm font-medium text-theme-text mb-1">
                 Username
               </label>
               <div className="relative">
@@ -200,6 +340,7 @@ export default function AuthForm({ type }: AuthFormProps) {
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
                 />
                 <input
+                  id="auth-username"
                   type="text"
                   name="username"
                   required
@@ -212,10 +353,11 @@ export default function AuthForm({ type }: AuthFormProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-theme-text mb-1">
+              <label htmlFor="auth-role" className="block text-sm font-medium text-theme-text mb-1">
                 Role
               </label>
               <select
+                id="auth-role"
                 name="role"
                 value={formData.role}
                 onChange={handleChange}
@@ -227,7 +369,7 @@ export default function AuthForm({ type }: AuthFormProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-theme-text mb-1">
+              <label htmlFor="auth-wallet" className="block text-sm font-medium text-theme-text mb-1">
                 Wallet Address
               </label>
               <div className="flex gap-2">
@@ -237,6 +379,7 @@ export default function AuthForm({ type }: AuthFormProps) {
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
                   />
                   <input
+                    id="auth-wallet"
                     type="text"
                     readOnly
                     value={address || ""}
@@ -247,7 +390,7 @@ export default function AuthForm({ type }: AuthFormProps) {
                 {!address && (
                   <button
                     type="button"
-                    onClick={connect}
+                    onClick={() => connect()}
                     disabled={isConnecting}
                     className="btn-primary py-2 px-4 text-sm flex items-center gap-2 disabled:opacity-60"
                   >
@@ -274,18 +417,58 @@ export default function AuthForm({ type }: AuthFormProps) {
                   Please unlock your Freighter wallet and try again.
                 </p>
               )}
-              {walletError && walletError !== "NOT_INSTALLED" && walletError !== "LOCKED" && (
+              {walletError === "TIMEOUT" && (
+                <p className="text-xs text-theme-error mt-1">
+                  Wallet connection timed out. Make sure Freighter is unlocked and try again.
+                </p>
+              )}
+              {walletError && walletError !== "NOT_INSTALLED" && walletError !== "LOCKED" && walletError !== "TIMEOUT" && (
                 <p className="text-xs text-theme-error mt-1">{walletError}</p>
               )}
               {!address && !walletError && type === "register" && (
-                <p className="text-xs text-theme-error mt-1">Wallet is required for registration</p>
+                <p className="text-xs text-theme-text mt-1">Optional: link a wallet now or from settings later.</p>
+              )}
+            </div>
+
+            {/* Collapsible referral code field */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setReferralOpen((o) => !o)}
+                className="flex items-center gap-2 text-sm text-theme-text hover:text-stellar-blue transition-colors"
+              >
+                <Gift size={16} />
+                Have a referral code?
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform ${referralOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {referralOpen && (
+                <div className="mt-2">
+                  <div className="relative">
+                    <Gift
+                      size={18}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
+                    />
+                    <input
+                      id="auth-referral"
+                      type="text"
+                      name="referralCode"
+                      value={formData.referralCode}
+                      onChange={handleChange}
+                      className="w-full pl-10 pr-4 py-2 bg-theme-bg border border-theme-border rounded-lg focus:ring-2 focus:ring-stellar-blue outline-none transition-all text-theme-text"
+                      placeholder="Enter referral code (optional)"
+                    />
+                  </div>
+                </div>
               )}
             </div>
           </>
         )}
 
         <div>
-          <label className="block text-sm font-medium text-theme-text mb-1">
+          <label htmlFor="auth-email" className="block text-sm font-medium text-theme-text mb-1">
             Email Address
           </label>
           <div className="relative">
@@ -294,6 +477,7 @@ export default function AuthForm({ type }: AuthFormProps) {
               className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
             />
             <input
+              id="auth-email"
               type="email"
               name="email"
               required
@@ -306,7 +490,7 @@ export default function AuthForm({ type }: AuthFormProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-theme-text mb-1">
+          <label htmlFor="auth-password" className="block text-sm font-medium text-theme-text mb-1">
             Password
           </label>
           <div className="relative">
@@ -315,6 +499,7 @@ export default function AuthForm({ type }: AuthFormProps) {
               className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
             />
             <input
+              id="auth-password"
               type="password"
               name="password"
               required
@@ -326,6 +511,33 @@ export default function AuthForm({ type }: AuthFormProps) {
           </div>
         </div>
 
+        {type === "register" && (
+          <div>
+            <label htmlFor="auth-confirm-password" className="block text-sm font-medium text-theme-text mb-1">
+              Confirm Password
+            </label>
+            <div className="relative">
+              <Lock
+                size={18}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
+              />
+              <input
+                id="auth-confirm-password"
+                type="password"
+                name="confirmPassword"
+                required
+                value={formData.confirmPassword}
+                onChange={handleChange}
+                className="w-full pl-10 pr-4 py-2 bg-theme-bg border border-theme-border rounded-lg focus:ring-2 focus:ring-stellar-blue outline-none transition-all text-theme-text"
+                placeholder="••••••••"
+              />
+            </div>
+            {formData.confirmPassword && !passwordsMatch && (
+              <p className="text-xs text-theme-error mt-1">Passwords do not match</p>
+            )}
+          </div>
+        )}
+
         {error && (
           <div className="p-3 bg-theme-error/10 border border-theme-error/20 rounded-lg text-theme-error text-sm">
             {error}
@@ -334,7 +546,7 @@ export default function AuthForm({ type }: AuthFormProps) {
 
         <button
           type="submit"
-          disabled={isLoading || (type === "register" && !address)}
+          disabled={isLoading || !passwordsMatch}
           className="w-full btn-primary py-3 flex items-center justify-center gap-2 font-semibold"
         >
           {isLoading ? (
@@ -346,6 +558,20 @@ export default function AuthForm({ type }: AuthFormProps) {
           )}
         </button>
       </form>
+
+      {type === "login" && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={handleWalletLogin}
+            disabled={isLoading || isConnecting}
+            className="w-full btn-secondary py-3 flex items-center justify-center gap-2 font-semibold disabled:opacity-60"
+          >
+            {isConnecting || isLoading ? <Loader2 size={18} className="animate-spin" /> : <Wallet size={18} />}
+            Continue with wallet
+          </button>
+        </div>
+      )}
 
       <div className="mt-8 pt-6 border-t border-theme-border text-center">
         <p className="text-theme-text">

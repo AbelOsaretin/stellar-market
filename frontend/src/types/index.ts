@@ -1,18 +1,35 @@
+export type ReputationTier = "None" | "Bronze" | "Silver" | "Gold" | "Platinum";
+
+export interface BadgeTier {
+  name: ReputationTier;
+  minScore: number;
+  colour: string;
+}
+
+export interface PlatformConfig {
+  badgeTiers: BadgeTier[];
+}
+
 export interface User {
   id: string;
-  walletAddress: string;
+  walletAddress?: string | null;
   username: string;
   email?: string;
   emailVerified?: boolean;
   bio?: string;
   avatarUrl?: string;
-  role: "CLIENT" | "FREELANCER";
+  role: "CLIENT" | "FREELANCER" | "ADMIN";
   twoFactorEnabled?: boolean;
   skills?: string[];
   averageRating?: number;
   reviewCount?: number;
   availability?: boolean;
   completedOnboarding?: boolean;
+  availabilityStatus?: "available" | "busy" | "unavailable";
+  authMethods?: {
+    email: boolean;
+    wallet: boolean;
+  };
   reputation?: {
     totalScore: string;
     totalWeight: string;
@@ -43,6 +60,7 @@ export interface Milestone {
   order: number;
   onChainIndex?: number;
   contractDeadline?: string;
+  releaseTransactionHash?: string;
 }
 
 export interface RevisionProposalMilestone {
@@ -74,12 +92,15 @@ export interface Job {
   freelancer?: User;
   milestones: Milestone[];
   contractJobId?: string;
-  escrowStatus: "UNFUNDED" | "FUNDED" | "COMPLETED" | "CANCELLED" | "DISPUTED";
+  escrowStatus: "UNFUNDED" | "FUNDED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "DISPUTED";
   revisionProposal?: RevisionProposal | null;
   imageUrl?: string;
   createdAt: string;
   updatedAt?: string;
   _count?: { applications: number };
+  isSaved?: boolean;
+  savedAt?: string;
+  paymentToken?: "XLM" | "USDC";
 }
 
 export interface RecommendedJob extends Job {
@@ -129,6 +150,7 @@ export interface Review {
   rating: number;
   comment: string;
   reviewer: User;
+  job?: { id: string; title: string };
   createdAt: string;
 }
 
@@ -148,6 +170,7 @@ export interface UserProfile extends User {
   services: ServiceListing[];
   portfolioItems?: PortfolioItem[];
   createdAt: string;
+  availability?: boolean;
 }
 
 export interface Conversation {
@@ -188,6 +211,33 @@ export interface Vote {
   voter: User;
 }
 
+export interface DisputeEvidence {
+  id: string;
+  ipfsHash?: string;
+  fileName: string;
+  fileType: string;
+  size?: number;
+  sizeFormatted?: string;
+  sha256?: string;
+  anchorTxHash?: string;
+  uploadedAt: string;
+  uploaderAddress?: string;
+  url?: string;
+  uploader?: {
+    id: string;
+    username: string;
+    walletAddress?: string;
+  };
+}
+
+export interface EvidenceVerification {
+  intact: boolean;
+  storedHash: string;
+  computedHash: string;
+  anchorTxHash?: string;
+  fileName: string;
+}
+
 export interface Dispute {
   id: string;
   jobId: string;
@@ -201,8 +251,43 @@ export interface Dispute {
   minVotes: number;
   createdAt: string;
   updatedAt: string;
+  voteDeadline?: string;
   job: Job;
   initiator: User;
   respondent: User;
   votes: Vote[];
+  evidence?: DisputeEvidence[];
+  arbitrators?: Array<{ address: string; displayName: string; avatarUrl: string | null }>;
+}
+
+export interface Transaction {
+  id: string;
+  jobId: string;
+  milestoneId?: string;
+  fromAddress: string;
+  toAddress: string;
+  amount: number;
+  tokenAddress: string;
+  txHash: string;
+  type: "DEPOSIT" | "RELEASE" | "REFUND" | "DISPUTE_PAYOUT";
+  createdAt: string;
+  updatedAt?: string;
+  job?: {
+    id: string;
+    title: string;
+  };
+  milestone?: {
+    id: string;
+    title: string;
+  };
+}
+
+export interface TransactionResponse {
+  transactions: Transaction[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }

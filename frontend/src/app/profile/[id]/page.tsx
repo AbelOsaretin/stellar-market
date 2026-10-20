@@ -1,7 +1,8 @@
 import { Metadata } from "next";
 import ProfileClient from "./ProfileClient";
+import { generateProfileMetadata } from "@/components/SEOMetadata";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 async function getProfile(id: string) {
   try {
@@ -19,38 +20,27 @@ async function getProfile(id: string) {
 export async function generateMetadata({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const profile = await getProfile(params.id);
+  const { id } = await params;
+  const profile = await getProfile(id);
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://stellarmarket.io";
+  const canonical = `${baseUrl}/profile/${id}`;
 
   if (!profile) {
     return {
       title: "Profile Not Found | StellarMarket",
       description: "The requested profile could not be found.",
+      alternates: { canonical },
     };
   }
 
-  const title = `${profile.username} | StellarMarket`;
-  const description =
-    profile.bio?.substring(0, 160) ||
-    `Check out ${profile.username}'s profile on StellarMarket.`;
-
-  return {
-    title,
-    description,
-    openGraph: {
-      title,
-      description,
-      images: profile.avatarUrl ? [profile.avatarUrl] : [],
-      type: "profile",
-      username: profile.username,
-    },
-    twitter: {
-      card: "summary",
-      title,
-      description,
-    },
-  };
+  return generateProfileMetadata({
+    name: profile.username,
+    bio: profile.bio || `Check out ${profile.username}'s profile on StellarMarket.`,
+    avatar: profile.avatarUrl,
+    url: canonical,
+  });
 }
 
 export default function ProfilePage() {

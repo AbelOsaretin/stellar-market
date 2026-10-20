@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Star,
@@ -16,18 +16,24 @@ import {
   AlertCircle,
   FileText,
   Images,
+  UserPlus,
 } from "lucide-react";
 import axios from "axios";
-import { UserProfile, PortfolioItem } from "@/types";
+import { useQuery } from "@tanstack/react-query";
+import { UserProfile, PortfolioItem, BadgeTier, PlatformConfig } from "@/types";
 import Link from "next/link";
 import Image from "next/image";
 import Skeleton from "@/components/Skeleton";
 import { useAuth } from "@/context/AuthContext";
-import { ContractService, ReputationResult } from "@/services/ContractService";
+import { ContractService, ReputationResult, DEFAULT_BADGE_TIERS } from "@/services/ContractService";
 import ShareMenu from "@/components/ShareMenu";
 import ProfileSkeleton from "@/components/skeletons/ProfileSkeleton";
+import WalletAddress from "@/components/WalletAddress";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import InviteToJobModal from "@/components/InviteToJobModal";
+import Avatar from "@/components/Avatar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 // Base URL without /api for serving static files
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
@@ -47,6 +53,9 @@ export default function ProfileClient() {
 
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [lightboxItem, setLightboxItem] = useState<PortfolioItem | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(lightboxRef, { open: !!lightboxItem, onClose: () => setLightboxItem(null) });
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -75,6 +84,16 @@ export default function ProfileClient() {
       .catch(() => setPortfolioItems([]));
   }, [id]);
 
+  const { data: badgeTiers } = useQuery<BadgeTier[]>({
+    queryKey: ["badgeTiers"],
+    queryFn: async () => {
+      const res = await axios.get<PlatformConfig>(`${API_URL}/platform/config`);
+      return res.data.badgeTiers ?? DEFAULT_BADGE_TIERS;
+    },
+    staleTime: 3_600_000,
+    placeholderData: DEFAULT_BADGE_TIERS,
+  });
+
   useEffect(() => {
     const fetchReputation = async () => {
       if (!profile?.walletAddress) {
@@ -84,7 +103,7 @@ export default function ProfileClient() {
 
       try {
         setReputationLoading(true);
-        const result = await ContractService.getReputation(profile.walletAddress);
+        const result = await ContractService.getReputation(profile.walletAddress, badgeTiers);
         setReputation(result);
       } catch (err) {
         console.error("Fetch reputation error:", err);
@@ -95,9 +114,16 @@ export default function ProfileClient() {
     };
 
     fetchReputation();
-  }, [profile?.walletAddress]);
+  }, [profile?.walletAddress, badgeTiers]);
 
   const isOwnProfile = currentUser && profile && currentUser.id === profile.id;
+  // A client viewing another user's freelancer profile gets a hiring CTA.
+  const canInvite =
+    !!currentUser &&
+    !!profile &&
+    !isOwnProfile &&
+    currentUser.role === "CLIENT" &&
+    profile.role === "FREELANCER";
 
   if (loading) {
     return <ProfileSkeleton />;
@@ -128,17 +154,13 @@ export default function ProfileClient() {
             size={16}
             className={
               s <= rating
-                ? "fill-yellow-400 text-yellow-400"
+                ? "fill-theme-warning text-theme-warning"
                 : "text-theme-border"
             }
           />
         ))}
       </div>
     );
-  };
-
-  const truncateAddress = (address: string) => {
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
   const getProfileCompleteness = (prof: UserProfile) => {
@@ -167,20 +189,13 @@ export default function ProfileClient() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="flex flex-col md:flex-row gap-8 items-start mb-12">
-        <div className="w-32 h-32 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex-shrink-0 flex items-center justify-center text-4xl overflow-hidden border-4 border-theme-card shadow-xl">
-          {profile.avatarUrl ? (
-            <Image
-              src={profile.avatarUrl}
-              alt={profile.username}
-              width={128}
-              height={128}
-              className="w-full h-full object-cover"
-              unoptimized
-            />
-          ) : (
-            <User size={64} className="text-white/50" />
-          )}
-        </div>
+        <Avatar
+          src={profile.avatarUrl}
+          alt={profile.username}
+          size={128}
+          unoptimized
+          className="flex-shrink-0 border-4 border-theme-card shadow-xl"
+        />
 
         <div className="flex-1">
           <div className="flex flex-wrap items-center gap-4 mb-4">
@@ -190,6 +205,18 @@ export default function ProfileClient() {
             <span className="text-sm font-medium text-stellar-purple bg-stellar-purple/10 px-3 py-1 rounded-full border border-stellar-purple/20">
               {profile.role}
             </span>
+            {profile.role === "FREELANCER" && (() => {
+              const avail = profile.availability;
+              const label = avail === false ? "Unavailable" : "Available";
+              const cls = avail === false
+                ? "bg-gray-400/20 border-gray-400/40 text-gray-500"
+                : "bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400";
+              return (
+                <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${cls}`}>
+                  {label}
+                </span>
+              );
+            })()}
             {isOwnProfile && (
               <Link
                 href="/settings"
@@ -199,9 +226,19 @@ export default function ProfileClient() {
                 Edit Profile
               </Link>
             )}
+            {canInvite && (
+              <button
+                type="button"
+                onClick={() => setInviteModalOpen(true)}
+                className="ml-auto btn-primary flex items-center gap-2 text-sm"
+              >
+                <UserPlus size={16} />
+                Invite to Job
+              </button>
+            )}
             <ShareMenu
               title={profile.username}
-              url={typeof window !== "undefined" ? window.location.href : ""}
+              url={`/profile/${profile.id}`}
               description={`Check out ${profile.username}'s profile on StellarMarket`}
             />
           </div>
@@ -231,9 +268,7 @@ export default function ProfileClient() {
           <div className="flex flex-wrap gap-6 text-sm text-theme-text">
             <div className="flex items-center gap-2">
               <ShieldCheck size={18} className="text-stellar-blue" />
-              <span className="font-mono">
-                {truncateAddress(profile.walletAddress)}
-              </span>
+              <WalletAddress address={profile.walletAddress} />
             </div>
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-stellar-blue" />
@@ -289,7 +324,7 @@ export default function ProfileClient() {
             ) : reputation ? (
               <div>
                 <div className="flex items-center gap-2">
-                  <Star className="text-yellow-400 fill-yellow-400" size={20} />
+                  <Star className="text-theme-warning fill-theme-warning" size={20} />
                   <span className="text-2xl font-bold text-theme-heading">
                     {reputation.score.toFixed(1)} / 5
                   </span>
@@ -333,7 +368,7 @@ export default function ProfileClient() {
                       key={idx}
                       className="text-xs flex items-center gap-2 text-theme-text"
                     >
-                      <AlertCircle size={14} className="text-amber-500" />
+                      <AlertCircle size={14} className="text-theme-warning" />
                       Add {step.label}
                     </li>
                   ))}
@@ -363,7 +398,7 @@ export default function ProfileClient() {
               </div>
               <div className="flex justify-between items-center p-3 bg-theme-bg rounded-lg border border-theme-border">
                 <span className="text-theme-text flex items-center gap-2">
-                  <Star size={18} className="text-yellow-400" /> Reputation
+                  <Star size={18} className="text-theme-warning" /> Reputation
                 </span>
                 <span className="text-theme-heading font-bold">
                   {reputation ? reputation.badgeTier : "No score yet"}
@@ -378,11 +413,11 @@ export default function ProfileClient() {
             </h3>
             <ul className="space-y-3">
               <li className="flex items-center gap-3 text-sm text-theme-text">
-                <ShieldCheck size={18} className="text-green-500" /> Wallet
+                <ShieldCheck size={18} className="text-theme-success" /> Wallet
                 Verified
               </li>
               <li className="flex items-center gap-3 text-sm text-theme-text">
-                <ShieldCheck size={18} className="text-green-500" /> Email
+                <ShieldCheck size={18} className="text-theme-success" /> Email
                 Verified
               </li>
             </ul>
@@ -439,7 +474,11 @@ export default function ProfileClient() {
                   <div key={review.id} className="card">
                     <div className="flex justify-between items-start mb-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex-shrink-0" />
+                        <Avatar
+                          src={review.reviewer.avatarUrl}
+                          alt={review.reviewer.username}
+                          size={32}
+                        />
                         <div>
                           <div className="font-semibold text-theme-heading">
                             {review.reviewer.username}
@@ -577,6 +616,7 @@ export default function ProfileClient() {
           onClick={() => setLightboxItem(null)}
         >
           <div
+            ref={lightboxRef}
             className="relative max-w-4xl w-full max-h-[90vh] bg-theme-card rounded-2xl overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
@@ -620,6 +660,15 @@ export default function ProfileClient() {
             </div>
           </div>
         </div>
+      )}
+
+      {canInvite && profile && (
+        <InviteToJobModal
+          freelancerId={profile.id}
+          freelancerName={profile.username}
+          isOpen={inviteModalOpen}
+          onClose={() => setInviteModalOpen(false)}
+        />
       )}
     </div>
   );

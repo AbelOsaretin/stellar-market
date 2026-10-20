@@ -9,15 +9,21 @@ const statusColors: Record<string, string> = {
   APPROVED: "bg-theme-success/20 text-theme-success border-theme-success/30",
   REJECTED: "bg-theme-error/20 text-theme-error border-theme-error/30",
   ACCEPTED: "bg-theme-success/20 text-theme-success border-theme-success/30",
-  PARTIALLY_PAID: "bg-amber-500/20 text-amber-500 border-amber-500/30",
+  PARTIALLY_PAID: "bg-theme-warning/20 text-theme-warning border-theme-warning/30",
 };
 
 interface StatusBadgeProps {
-  status: string;
+  status: string | null | undefined;
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const colors = statusColors[status] || "bg-gray-500/20 text-gray-400 border-gray-500/30";
+  // `status` legitimately comes back missing on data fetched through the
+  // server-rendered, unauthenticated path (several server-sourced records —
+  // job, in particular — omit status-like fields from their public shape).
+  // Render nothing rather than crash the whole page on `undefined.replaceAll`.
+  if (!status) return null;
+
+  const colors = statusColors[status] || "bg-theme-border/30 text-theme-text border-theme-border/30";
 
   return (
     <span

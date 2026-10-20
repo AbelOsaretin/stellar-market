@@ -1,6 +1,7 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect } from "react";
+import { useTheme as useNextTheme } from "next-themes";
 
 type Theme = "dark" | "light";
 
@@ -12,15 +13,7 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof document !== "undefined") {
-      const ssrTheme = document.documentElement.getAttribute("data-theme");
-      if (ssrTheme === "dark" || ssrTheme === "light") {
-        return ssrTheme;
-      }
-    }
-    return "light";
-  });
+  const { theme, setTheme, resolvedTheme } = useNextTheme();
 
   useEffect(() => {
     // Keep client state aligned with the pre-hydration theme from layout script
@@ -35,18 +28,24 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Keep the 'dark' class in sync with the resolved theme so Tailwind
     // dark-mode utilities work regardless of which strategy is active (#1615).
     document.documentElement.classList.toggle("dark", initialTheme === "dark");
+    if (typeof document !== "undefined") {
+      document.documentElement.classList.remove("dark");
+    }
   }, []);
 
   const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
+    const currentTheme = (resolvedTheme ?? theme) as Theme | undefined;
+    const newTheme = currentTheme === "dark" ? "light" : "dark";
     setTheme(newTheme);
     localStorage.setItem("stellar-market-theme", newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
     document.documentElement.classList.toggle("dark", newTheme === "dark");
   };
 
+  const activeTheme = (resolvedTheme ?? theme ?? "light") as Theme;
+
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme: activeTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );

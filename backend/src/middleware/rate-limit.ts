@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { MemoryStore } from "express-rate-limit";
+import RedisStore, { RedisReply } from "rate-limit-redis";
+import { getRedisClient } from "../config/redis";
 
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const WRITE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const WRITE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 type RateLimitedRequest = Request & { userId?: string; rateLimit?: { resetTime?: Date } };
 
@@ -13,7 +15,11 @@ const sendTooManyRequests = (req: RateLimitedRequest, res: Response): void => {
     : Math.ceil(RATE_LIMIT_WINDOW_MS / 1000);
 
   res.setHeader("Retry-After", retryAfterSeconds.toString());
-  res.status(429).json({ error: "Too many requests" });
+  res.status(429).json({
+    code: "RATE_LIMITED",
+    error: "Too many requests",
+    requestId: req.requestId,
+  });
 };
 
 const sendTooManyWrites = (req: RateLimitedRequest, res: Response): void => {
@@ -23,33 +29,69 @@ const sendTooManyWrites = (req: RateLimitedRequest, res: Response): void => {
     : Math.ceil(WRITE_RATE_LIMIT_WINDOW_MS / 1000);
 
   res.setHeader("Retry-After", retryAfterSeconds.toString());
-  res.status(429).json({ error: "Too many write requests" });
+  res.status(429).json({
+    code: "RATE_LIMITED",
+    error: "Too many write requests",
+    requestId: req.requestId,
+  });
 };
+
+// Redis store configuration
+const redisClient = getRedisClient();
+const sendCommand = (...args: string[]): Promise<RedisReply> =>
+  redisClient!.call(args[0], ...args.slice(1)) as Promise<RedisReply>;
+
+const redisStore = redisClient
+  ? new RedisStore({
+      sendCommand,
+      prefix: "rate_limit:",
+    })
+  : undefined;
+
+// When no Redis is configured, use explicit in-memory stores so they can be reset in tests
+const globalStore = redisStore ?? new MemoryStore();
+const loginStore = redisStore ? new RedisStore({ sendCommand, prefix: "rate_limit_login:" }) : new MemoryStore();
+const registerStore = redisStore ? new RedisStore({ sendCommand, prefix: "rate_limit_register:" }) : new MemoryStore();
+const forgotStore = redisStore ? new RedisStore({ sendCommand, prefix: "rate_limit_forgot:" }) : new MemoryStore();
+const writeStore = redisStore ? new RedisStore({ sendCommand, prefix: "rate_limit_write:" }) : new MemoryStore();
 
 export const globalRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 200,
+  max: 100, // 100 req/min per IP
   standardHeaders: true,
   legacyHeaders: false,
+  store: globalStore,
   passOnStoreError: true,
   handler: sendTooManyRequests,
 });
 
 export const loginRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 10,
+  max: 10, // 10 req/min for auth endpoints
   standardHeaders: true,
   legacyHeaders: false,
+  store: loginStore,
   passOnStoreError: true,
+  keyGenerator: (req: Request) => {
+    // Normalize IPv6-mapped IPv4 (::ffff:x.x.x.x) to avoid dual-stack bypass
+    return (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/i, "");
+  },
+  validate: { ip: false }, // IP is normalized in keyGenerator above
   handler: sendTooManyRequests,
 });
 
 export const registerRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 10,
+  max: 10, // 10 req/min for auth endpoints
   standardHeaders: true,
   legacyHeaders: false,
+  store: registerStore,
   passOnStoreError: true,
+  keyGenerator: (req: Request) => {
+    // Normalize IPv6-mapped IPv4 (::ffff:x.x.x.x) to avoid dual-stack bypass
+    return (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/i, "");
+  },
+  validate: { ip: false }, // IP is normalized in keyGenerator above
   handler: sendTooManyRequests,
 });
 
@@ -58,7 +100,13 @@ export const forgotPasswordRateLimiter = rateLimit({
   max: 3,
   standardHeaders: true,
   legacyHeaders: false,
+  store: forgotStore,
   passOnStoreError: true,
+  keyGenerator: (req: Request) => {
+    // Normalize IPv6-mapped IPv4 (::ffff:x.x.x.x) to avoid dual-stack bypass
+    return (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/i, "");
+  },
+  validate: { ip: false }, // IP is normalized in keyGenerator above
   handler: sendTooManyRequests,
 });
 
@@ -67,11 +115,21 @@ export const writeRateLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  store: writeStore,
   passOnStoreError: true,
-  keyGenerator: (req) => {
+  keyGenerator: (req: Request) => {
     const rateLimitedReq = req as RateLimitedRequest;
-    return rateLimitedReq.userId || req.ip || "unknown";
+    if (rateLimitedReq.userId) return String(rateLimitedReq.userId);
+    // Normalize IPv6-mapped IPv4 (::ffff:x.x.x.x) to avoid dual-stack bypass
+    const ip = (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/i, "");
+    return ip;
   },
-  skip: (req) => req.method !== "POST",
+  validate: { ip: false }, // IP is normalized in keyGenerator above
+  skip: (req: Request) => req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS",
   handler: sendTooManyWrites,
 });
+
+export async function resetAllRateLimiters(): Promise<void> {
+  const stores = [globalStore, loginStore, registerStore, forgotStore, writeStore];
+  await Promise.all(stores.map((s) => (s as MemoryStore).resetAll?.()));
+}

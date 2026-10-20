@@ -1,17 +1,22 @@
 import type { PrismaClient } from "@prisma/client";
+import { rpc } from "@stellar/stellar-sdk";
 import RedisClient from "./redis";
-import { logger } from "./logger";
+import { config } from "../config";
 import { getHorizonListenerHealth } from "../services/horizon-listener.service";
 
-export type DependencyHealthStatus = "ok" | "error";
+export type DependencyHealthStatus = "ok" | "error" | "degraded";
 export type HorizonListenerStatus = "connected" | "degraded" | "down";
 
 export type HealthResponse = {
   status: "ok" | "degraded";
   service: "stellarmarket-api";
+  uptime?: number;
+  version?: string;
+
   checks: {
     database: DependencyHealthStatus;
     redis: DependencyHealthStatus;
+    sorobanRpc: DependencyHealthStatus;
     horizonListener: HorizonListenerStatus;
   };
 };
@@ -22,14 +27,14 @@ export async function getHealthStatus(
   const checks: HealthResponse["checks"] = {
     database: "ok",
     redis: "ok",
+    sorobanRpc: "ok",
     horizonListener: getHorizonListenerHealth(),
   };
 
   try {
     await prisma.$queryRawUnsafe("SELECT 1");
-  } catch (error) {
+  } catch {
     checks.database = "error";
-    logger.error({ err: error }, "Health check database probe failed");
   }
 
   try {
@@ -37,19 +42,28 @@ export async function getHealthStatus(
       await RedisClient.connect();
     }
     await RedisClient.getInstance().ping();
-  } catch (error) {
+  } catch {
     checks.redis = "error";
-    logger.error({ err: error }, "Health check Redis probe failed");
   }
 
-  const healthy =
+  try {
+    const server = new rpc.Server(config.stellar.rpcUrl);
+    await server.getHealth();
+  } catch {
+    checks.sorobanRpc = "error";
+  }
+
+  // Database and Redis are critical; horizon listener "down" is also critical
+  const criticalHealthy =
     checks.database === "ok" &&
     checks.redis === "ok" &&
     checks.horizonListener !== "down";
 
   return {
-    status: healthy ? "ok" : "degraded",
+    status: criticalHealthy ? "ok" : "degraded",
     service: "stellarmarket-api",
+    uptime: Math.floor(process.uptime()),
+    version: config.version,
     checks,
   };
 }

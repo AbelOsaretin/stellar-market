@@ -98,6 +98,9 @@
                 },
                 {
                   "u64": 604800
+                },
+                {
+                  "u32": 518400
                 }
               ]
             }
@@ -145,6 +148,15 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 0
+                  }
+                },
+                {
+                  "u32": 0
                 }
               ]
             }
@@ -308,10 +320,29 @@
                     },
                     {
                       "key": {
+                        "symbol": "expiry_ledger"
+                      },
+                      "val": {
+                        "u32": 518400
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "freelancer"
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "funded_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 3000
+                        }
                       }
                     },
                     {
@@ -384,6 +415,12 @@
                                     }
                                   ]
                                 }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "token"
+                                },
+                                "val": "void"
                               }
                             ]
                           },
@@ -435,6 +472,12 @@
                                     }
                                   ]
                                 }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "token"
+                                },
+                                "val": "void"
                               }
                             ]
                           },
@@ -486,6 +529,12 @@
                                     }
                                   ]
                                 }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "token"
+                                },
+                                "val": "void"
                               }
                             ]
                           }
@@ -514,6 +563,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "token_balances"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "total_amount"
                       },
                       "val": {
@@ -529,7 +586,7 @@
             },
             "ext": "v0"
           },
-          4095
+          535000
         ]
       ],
       [
@@ -574,7 +631,7 @@
             },
             "ext": "v0"
           },
-          4095
+          6311999
         ]
       ],
       [
@@ -1025,7 +1082,7 @@
             },
             "ext": "v0"
           },
-          4095
+          6311999
         ]
       ]
     ]
@@ -1237,6 +1294,9 @@
                 },
                 {
                   "u64": 604800
+                },
+                {
+                  "u32": 518400
                 }
               ]
             }
@@ -1424,6 +1484,15 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 0
+                  }
+                },
+                {
+                  "u32": 0
                 }
               ]
             }
@@ -1933,10 +2002,29 @@
                 },
                 {
                   "key": {
+                    "symbol": "expiry_ledger"
+                  },
+                  "val": {
+                    "u32": 518400
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "freelancer"
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "funded_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 3000
+                    }
                   }
                 },
                 {
@@ -2009,6 +2097,12 @@
                                 }
                               ]
                             }
+                          },
+                          {
+                            "key": {
+                              "symbol": "token"
+                            },
+                            "val": "void"
                           }
                         ]
                       },
@@ -2060,6 +2154,12 @@
                                 }
                               ]
                             }
+                          },
+                          {
+                            "key": {
+                              "symbol": "token"
+                            },
+                            "val": "void"
                           }
                         ]
                       },
@@ -2111,6 +2211,12 @@
                                 }
                               ]
                             }
+                          },
+                          {
+                            "key": {
+                              "symbol": "token"
+                            },
+                            "val": "void"
                           }
                         ]
                       }
@@ -2135,6 +2241,14 @@
                   },
                   "val": {
                     "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "token_balances"
+                  },
+                  "val": {
+                    "vec": []
                   }
                 },
                 {

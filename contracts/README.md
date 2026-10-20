@@ -19,6 +19,7 @@ This directory contains Soroban smart contracts for:
 
 - `escrow/` - Escrow and milestone payment contract
 - `reputation/` - Reputation and stake-weighted reviews
+- `reputation_interface/` - Shared `ReputationVerifier` trait + `Badge` types for cross-contract reputation checks
 - `dispute/` - Dispute voting and resolution
 - `integration-tests/` - Cross-contract integration tests
 - `scripts/` - Deployment scripts
@@ -189,7 +190,9 @@ stellar contract invoke \
   --min_votes 3 \
   --tie_break_method "Escalate"
 
-# cast_vote(dispute_id, voter, choice, reason)
+# cast_vote(dispute_id, voter, choice, reason, nonce)
+# Use a fresh nonce for each cast_vote call by the same voter, even across disputes.
+# The contract rejects reused nonces during the replay-protection window.
 stellar contract invoke \
   --id <DISPUTE_CONTRACT_ID> \
   --source-account "$SOURCE_ACCOUNT" \
@@ -199,7 +202,8 @@ stellar contract invoke \
   --dispute_id 1 \
   --voter <VOTER_ADDRESS> \
   --choice "Freelancer" \
-  --reason "evidence supports delivery"
+  --reason "evidence supports delivery" \
+  --nonce 1
 
 # resolve_dispute(dispute_id)
 stellar contract invoke \
@@ -209,6 +213,34 @@ stellar contract invoke \
   -- \
   resolve_dispute \
   --dispute_id 1
+```
+
+## Cross-contract reputation interface
+
+`reputation_interface/` exposes a shared `ReputationVerifier` trait so contracts
+like escrow and dispute can gate actions on a user's reputation without
+duplicating reputation logic:
+
+```rust
+use stellar_market_reputation_interface::{Badge, ReputationVerifier};
+
+fn require_min_score<V: ReputationVerifier>(
+    verifier: &V,
+    env: &Env,
+    user: Address,
+    min: u32,
+) -> bool {
+    verifier.get_score(env, user.clone()) >= min
+        && verifier.has_badge(env, user, Badge::Silver)
+}
+```
+
+An on-chain implementor typically wraps the reputation contract's generated
+client and forwards each call cross-contract; tests can substitute a mock
+implementor (see `reputation_interface/src/lib.rs`). Build/test it with:
+
+```bash
+cargo test -p stellar-market-reputation-interface
 ```
 
 ## Troubleshooting

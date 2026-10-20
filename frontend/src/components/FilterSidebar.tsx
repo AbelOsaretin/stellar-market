@@ -1,19 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { X, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { JobFilters } from "@/hooks/useJobFilters";
-
-const SKILLS = [
-  "Rust",
-  "TypeScript",
-  "React",
-  "Figma",
-  "Solidity",
-  "Node.js",
-  "Python",
-  "Go",
-];
+import { useFocusTrap } from "@/hooks/useFocusTrap";
+import axios from "axios";
 
 const STATUSES = [
   { value: "OPEN", label: "Open" },
@@ -59,6 +50,7 @@ function FilterSection({
     <div className="border-b border-theme-border pb-4 mb-4 last:border-b-0 last:mb-0 last:pb-0">
       <button
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
         className="flex items-center justify-between w-full text-sm font-medium text-theme-heading mb-2"
       >
         {title}
@@ -78,7 +70,54 @@ export default function FilterSidebar({
   isOpen,
   onClose,
 }: FilterSidebarProps) {
-  const content = (
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(true);
+  const [skills, setSkills] = useState<string[]>([]);
+  const [loadingSkills, setLoadingSkills] = useState(true);
+
+  useFocusTrap(drawerRef, { open: isOpen, onClose });
+
+  // Fetch categories from API
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
+        const response = await axios.get<string[]>(`${API_URL}/categories`);
+        setCategories(response.data);
+      } catch (error) {
+        console.error("Failed to fetch categories:", error);
+        // Fallback to hardcoded categories if API fails
+        setCategories(["Frontend", "Backend", "Smart Contract", "Design", "Mobile", "Documentation", "DevOps"]);
+      } finally {
+        setLoadingCategories(false);
+      }
+    };
+
+    fetchCategories();
+  }, []);
+
+  // Fetch skills from API
+  useEffect(() => {
+    const fetchSkills = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
+        const response = await axios.get<{ skills: { id: string; name: string }[] }>(`${API_URL}/skills`);
+        const skillNames = (response.data?.skills ?? []).map((s) => s.name);
+        setSkills(skillNames);
+      } catch (error) {
+        console.error("Failed to fetch skills:", error);
+        // Fallback to hardcoded skills if API fails
+        setSkills(["Rust", "TypeScript", "React", "Figma", "Solidity", "Node.js", "Python", "Go", "Next.js", "Tailwind", "PostgreSQL", "GraphQL", "Docker", "AWS"]);
+      } finally {
+        setLoadingSkills(false);
+      }
+    };
+
+    fetchSkills();
+  }, []);
+
+  const renderContent = (idPrefix: string) => (
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
@@ -94,6 +133,7 @@ export default function FilterSidebar({
         <button
           onClick={onClose}
           className="lg:hidden p-1 text-theme-text hover:text-theme-heading transition-colors"
+          aria-label="Close filters"
         >
           <X size={20} />
         </button>
@@ -101,7 +141,9 @@ export default function FilterSidebar({
 
       {/* Sort */}
       <FilterSection title="Sort By">
+        <label htmlFor={`${idPrefix}filter-sort`} className="sr-only">Sort By</label>
         <select
+          id={`${idPrefix}filter-sort`}
           value={filters.sort}
           onChange={(e) => updateFilter("sort", e.target.value)}
           className="input-field text-sm"
@@ -114,10 +156,32 @@ export default function FilterSidebar({
         </select>
       </FilterSection>
 
+      {/* Category */}
+      <FilterSection title="Category">
+        <label htmlFor={`${idPrefix}filter-category`} className="sr-only">Category</label>
+        <select
+          id={`${idPrefix}filter-category`}
+          value={filters.category}
+          onChange={(e) => updateFilter("category", e.target.value)}
+          className="input-field text-sm"
+          disabled={loadingCategories}
+        >
+          <option value="All">All Categories</option>
+          {categories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+        {loadingCategories && (
+          <p className="text-xs text-theme-text mt-1">Loading categories...</p>
+        )}
+      </FilterSection>
+
       {/* Skills */}
       <FilterSection title="Skills">
         <div className="flex flex-wrap gap-2">
-          {SKILLS.map((skill) => (
+          {skills.map((skill) => (
             <button
               key={skill}
               onClick={() => toggleArrayFilter("skills", skill)}
@@ -131,6 +195,9 @@ export default function FilterSidebar({
             </button>
           ))}
         </div>
+        {loadingSkills && (
+          <p className="text-xs text-theme-text mt-2">Loading skills...</p>
+        )}
       </FilterSection>
 
       {/* Status */}
@@ -150,22 +217,45 @@ export default function FilterSidebar({
         </div>
       </FilterSection>
 
-      {/* Budget Range */}
+      {/* Budget Range
+           The min/max budget inputs auto-clamp to prevent a contradictory
+           range (e.g. Min = 5000, Max = 100) which would silently return
+           zero results from the API.  If the user enters a min above the
+           current max, min is clamped down to max; if they enter a max
+           below the current min, max is raised to min (issue #954).     */}
       <FilterSection title="Budget (XLM)">
         <div className="flex gap-2">
+          <label htmlFor={`${idPrefix}filter-budget-min`} className="sr-only">Minimum budget</label>
           <input
+            id={`${idPrefix}filter-budget-min`}
             type="number"
             placeholder="Min"
             value={filters.minBudget}
-            onChange={(e) => updateFilter("minBudget", e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val && filters.maxBudget && Number(val) > Number(filters.maxBudget)) {
+                updateFilter("minBudget", filters.maxBudget);
+              } else {
+                updateFilter("minBudget", val);
+              }
+            }}
             className="input-field text-sm"
             min={0}
           />
+          <label htmlFor={`${idPrefix}filter-budget-max`} className="sr-only">Maximum budget</label>
           <input
+            id={`${idPrefix}filter-budget-max`}
             type="number"
             placeholder="Max"
             value={filters.maxBudget}
-            onChange={(e) => updateFilter("maxBudget", e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val && filters.minBudget && Number(val) < Number(filters.minBudget)) {
+                updateFilter("maxBudget", filters.minBudget);
+              } else {
+                updateFilter("maxBudget", val);
+              }
+            }}
             className="input-field text-sm"
             min={0}
           />
@@ -207,7 +297,7 @@ export default function FilterSidebar({
     <>
       {/* Desktop: sticky sidebar */}
       <aside className="hidden lg:block w-64 shrink-0 sticky top-24 self-start">
-        <div className="card">{content}</div>
+        <div className="card">{renderContent("desktop-")}</div>
       </aside>
 
       {/* Mobile: drawer overlay */}
@@ -217,8 +307,8 @@ export default function FilterSidebar({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
             onClick={onClose}
           />
-          <div className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-theme-card border-r border-theme-border p-6 overflow-y-auto shadow-2xl animate-slide-in-left">
-            {content}
+          <div ref={drawerRef} className="absolute left-0 top-0 bottom-0 w-80 max-w-[85vw] bg-theme-card border-r border-theme-border p-6 overflow-y-auto shadow-2xl animate-slide-in-left">
+            {renderContent("mobile-")}
           </div>
         </div>
       )}

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   Briefcase,
   FileText,
@@ -15,29 +16,30 @@ import {
   Clock,
   CheckCircle2,
   Trash2,
-  Send,
-  XCircle,
-  Eye,
-  ChevronRight,
 } from "lucide-react";
 import axios from "axios";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
 import StatusBadge from "@/components/StatusBadge";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { DashboardStatsSkeleton, DashboardTabContentSkeleton } from "@/components/skeletons/DashboardSkeleton";
+import DisputeCardSkeleton from "@/components/skeletons/DisputeCardSkeleton";
+import StatsRow from "@/components/StatsRow";
+import { useDelay } from "@/hooks/useDelay";
 import { useAuth } from "@/context/AuthContext";
 import { useSocket } from "@/context/SocketContext";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { Job, Application, PaginatedResponse } from "@/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const EarningsChart = dynamic(() => import("@/components/EarningsChart"), {
+  ssr: false,
+  loading: () => <div className="h-56 bg-theme-border/20 rounded animate-pulse" />,
+});
+
+const SpendingChart = dynamic(() => import("@/components/SpendingChart"), {
+  ssr: false,
+  loading: () => <div className="h-56 bg-theme-border/20 rounded animate-pulse" />,
+});
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 interface DashboardStats {
   postedJobs: number;
@@ -109,10 +111,13 @@ export default function DashboardPage() {
   const [earningsChartData, setEarningsChartData] = useState<Array<{ name: string; amount: number }>>([]);
   const [spendingChartData, setSpendingChartData] = useState<Array<{ name: string; amount: number }>>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const ready = useDelay();
 
   // Withdraw-application state (freelancer)
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
   const [withdrawConfirmId, setWithdrawConfirmId] = useState<string | null>(null);
+  const withdrawConfirmRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(withdrawConfirmRef, { open: !!withdrawConfirmId, onClose: () => setWithdrawConfirmId(null) });
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
@@ -227,42 +232,6 @@ export default function DashboardPage() {
     }
   }, [token, user, isClient, isClientByProfile]);
 
-  const fetchPendingApplicants = useCallback(async () => {
-    if (!token || !user?.id || !isClient) return;
-    setApplicantsLoading(true);
-    try {
-      const jobsRes = await axios.get(`\${API}/jobs/mine`, {
-        params: { limit: 100 },
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const clientJobs: Job[] = (jobsRes.data.data ?? []).filter(
-        (j: Job) => j.client?.id === user.id && j.status === "OPEN"
-      );
-
-      const allApps: ExtendedApplication[] = [];
-      for (const job of clientJobs) {
-        try {
-          const appsRes = await axios.get(`\${API}/jobs/${job.id}/applications`, {
-            params: { status: "PENDING", limit: 20 },
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const apps = (appsRes.data.data ?? []).map((a: ExtendedApplication) => ({
-            ...a,
-            job: { id: job.id, title: job.title },
-          }));
-          allApps.push(...apps);
-        } catch {
-          // Skip jobs with fetch errors
-        }
-      }
-      setPendingApplicants(allApps);
-    } catch {
-      setPendingApplicants([]);
-    } finally {
-      setApplicantsLoading(false);
-    }
-  }, [token, user?.id, isClient]);
-
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
@@ -298,16 +267,16 @@ export default function DashboardPage() {
 
   const clientStatCards = [
     { label: "Posted Jobs", value: `${stats.postedJobs}`, detail: `${stats.openJobs} open · ${stats.inProgressJobs} funded · ${stats.completedJobs} completed`, icon: Briefcase, color: "text-stellar-blue" },
-    { label: "Pending Applications", value: `${stats.applicationsToReview}`, detail: "Awaiting your review", icon: FileText, color: "text-yellow-400" },
-    { label: "Active Disputes", value: `${stats.activeDisputes}`, detail: "Require attention", icon: AlertTriangle, color: "text-red-400" },
-    { label: "Total Spent", value: `${stats.totalSpent.toLocaleString()} XLM`, detail: `Rating: ${stats.rating > 0 ? `${stats.rating.toFixed(1)}/5` : "N/A"}`, icon: DollarSign, color: "text-stellar-purple" },
+    { label: "Pending Applications", value: `${stats.applicationsToReview}`, detail: "Awaiting your review", icon: FileText, color: "text-theme-warning" },
+    { label: "Active Disputes", value: `${stats.activeDisputes}`, detail: "Require attention", icon: AlertTriangle, color: "text-theme-error" },
+    { label: "Total Spent", value: `${stats.totalSpent.toLocaleString()} XLM`, detail: `Rating: ${stats.rating > 0 ? `${stats.rating.toFixed(1)}/5` : "N/A"}`, icon: DollarSign, color: "text-stellar-purple", href: "/dashboard/client-earnings" },
   ];
 
   const freelancerStatCards = [
     { label: "Active Work", value: `${stats.activeWork}`, detail: "Jobs in progress", icon: Briefcase, color: "text-stellar-blue" },
-    { label: "Applications", value: `${stats.totalApplications}`, detail: `${stats.pendingApplications} pending · ${stats.acceptedApplications} accepted`, icon: FileText, color: "text-yellow-400" },
+    { label: "Applications", value: `${stats.totalApplications}`, detail: `${stats.pendingApplications} pending · ${stats.acceptedApplications} accepted`, icon: FileText, color: "text-theme-warning" },
     { label: "Total Earned", value: `${stats.totalEarned.toLocaleString()} XLM`, detail: `Pending: ${stats.pendingPayout.toLocaleString()} XLM`, icon: DollarSign, color: "text-stellar-purple" },
-    { label: "Rating", value: stats.rating > 0 ? `${stats.rating.toFixed(1)}/5` : "N/A", detail: `${user?.reviewCount ?? 0} reviews`, icon: Star, color: "text-green-400" },
+    { label: "Rating", value: stats.rating > 0 ? `${stats.rating.toFixed(1)}/5` : "N/A", detail: `${user?.reviewCount ?? 0} reviews`, icon: Star, color: "text-theme-success" },
   ];
 
   const displayStats = isClient ? clientStatCards : freelancerStatCards;
@@ -339,22 +308,36 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      {dataLoading ? (
+      {!isClient ? (
+        <StatsRow />
+      ) : dataLoading && ready ? (
         <DashboardStatsSkeleton />
-      ) : (
+      ) : dataLoading ? null : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {displayStats.map((stat) => (
-            <div key={stat.label} className="card flex items-center gap-4">
-              <div className={`${stat.color}`}>
-                <stat.icon size={24} />
+          {displayStats.map((stat) => {
+            const content = (
+              <>
+                <div className={`${stat.color}`}>
+                  <stat.icon size={24} />
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-theme-heading">{stat.value}</div>
+                  <div className="text-sm text-theme-text">{stat.label}</div>
+                  <div className="text-xs text-theme-text/60 mt-0.5">{stat.detail}</div>
+                </div>
+              </>
+            );
+
+            return "href" in stat && stat.href ? (
+              <Link key={stat.label} href={stat.href} className="card flex items-center gap-4 hover:opacity-80 transition-opacity">
+                {content}
+              </Link>
+            ) : (
+              <div key={stat.label} className="card flex items-center gap-4">
+                {content}
               </div>
-              <div>
-                <div className="text-2xl font-bold text-theme-heading">{stat.value}</div>
-                <div className="text-sm text-theme-text">{stat.label}</div>
-                <div className="text-xs text-theme-text/60 mt-0.5">{stat.detail}</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -375,9 +358,17 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {dataLoading ? (
-        <DashboardTabContentSkeleton />
-      ) : (
+      {dataLoading && ready ? (
+        activeTab === "Active Disputes" ? (
+          <div className="space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <DisputeCardSkeleton key={i} />
+            ))}
+          </div>
+        ) : (
+          <DashboardTabContentSkeleton />
+        )
+      ) : dataLoading ? null : (
         <>
           {/* ── Freelancer tab content ── */}
           {!isClient && activeTab === "My Applications" && (
@@ -432,7 +423,7 @@ export default function DashboardPage() {
             const jobTitle = (app as Application & { job?: { title?: string } } | undefined)?.job?.title ?? "this job";
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                <div className="bg-theme-card border border-theme-border rounded-xl shadow-2xl w-full max-w-md p-6">
+                <div ref={withdrawConfirmRef} className="bg-theme-card border border-theme-border rounded-xl shadow-2xl w-full max-w-md p-6">
                   <h2 className="text-lg font-semibold text-theme-heading mb-2">
                     Withdraw Application?
                   </h2>
@@ -496,17 +487,7 @@ export default function DashboardPage() {
             <div className="space-y-4">
               <div className="card">
                 <h3 className="font-semibold text-theme-heading mb-3">Milestone payout trend</h3>
-                <div className="h-56">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={earningsChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.15} />
-                      <XAxis dataKey="name" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="amount" fill="#5b8cff" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <EarningsChart data={earningsChartData} />
               </div>
               {milestones.length > 0 ? (
                 milestones.map((milestone) => (
@@ -521,7 +502,7 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Clock size={14} className="text-yellow-400" />
+                      <Clock size={14} className="text-theme-warning" />
                       <StatusBadge status={milestone.status} />
                     </div>
                   </Link>
@@ -557,17 +538,7 @@ export default function DashboardPage() {
             <div className="space-y-4">
               <div className="card">
                 <h3 className="font-semibold text-theme-heading mb-3">Milestone spending overview</h3>
-                <div className="h-56">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={spendingChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.15} />
-                      <XAxis dataKey="name" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="amount" fill="#9b6bff" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <SpendingChart data={spendingChartData} />
               </div>
               {postedJobs.length > 0 ? (
                 postedJobs.map((job) => (
@@ -645,14 +616,14 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <AlertTriangle size={14} className="text-red-400" />
+                      <AlertTriangle size={14} className="text-theme-error" />
                       <StatusBadge status={dispute.status} />
                     </div>
                   </Link>
                 ))
               ) : (
                 <div className="card text-center py-12">
-                  <CheckCircle2 className="mx-auto text-green-400 mb-4" size={40} />
+                  <CheckCircle2 className="mx-auto text-theme-success mb-4" size={40} />
                   <h3 className="text-lg font-semibold text-theme-heading mb-2">No active disputes</h3>
                   <p className="text-theme-text">All clear! No disputes require your attention.</p>
                 </div>

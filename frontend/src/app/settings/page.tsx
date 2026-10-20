@@ -5,7 +5,15 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import { useAuth } from "@/context/AuthContext";
+import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/components/Toast";
+import WalletAddress from "@/components/WalletAddress";
+import SkillCombobox from "@/components/SkillCombobox";
+import { useForm, Controller } from "react-hook-form";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
+import UnsavedChangesModal from "@/components/UnsavedChangesModal";
+import { resizeImage, createImagePreview } from "@/utils/image";
+import Avatar from "@/components/Avatar";
 import {
   User,
   Settings,
@@ -18,20 +26,21 @@ import {
   Copy,
   Check,
   Upload,
-  X,
   Plus,
   ImageIcon,
   GripVertical,
   Pencil,
   Trash2,
   Images,
+  Wallet,
 } from "lucide-react";
 import { PortfolioItem } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
 const PORTFOLIO_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+const AVATAR_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const PORTFOLIO_MAX_FILE_SIZE = 5 * 1024 * 1024;
 const PORTFOLIO_MAX_ITEMS = 10;
 
@@ -45,7 +54,8 @@ interface FormErrors {
 }
 
 export default function SettingsPage() {
-  const { user, token, isLoading: authLoading, updateUser } = useAuth();
+  const { user, token, isLoading: authLoading, updateUser, refreshUser } = useAuth();
+  const { address, connect, bindWallet, isConnecting } = useWallet();
   const { toast } = useToast();
   const router = useRouter();
 
@@ -54,16 +64,41 @@ export default function SettingsPage() {
 
   // Seed form fields immediately from auth-context user so the form is never
   // blank while the fresh API fetch is in-flight (or if it fails).
-  const [username, setUsername] = useState(user?.username ?? "");
-  const [email, setEmail] = useState(user?.email ?? "");
-  const [bio, setBio] = useState(user?.bio ?? "");
-  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
-  const [role, setRole] = useState<"CLIENT" | "FREELANCER">(user?.role ?? "FREELANCER");
-  const [skills, setSkills] = useState<string[]>(user?.skills ?? []);
-  const [newSkill, setNewSkill] = useState("");
+  type ProfileFormValues = {
+    username: string;
+    email: string;
+    bio: string;
+    avatarUrl: string;
+    role: "CLIENT" | "FREELANCER";
+    availabilityStatus: "available" | "busy" | "unavailable";
+    skills: string[];
+  };
+
+  const { 
+    register, 
+    handleSubmit: hookFormSubmit, 
+    setValue, 
+    watch, 
+    control, 
+    reset, 
+    formState: { errors: formErrors, isDirty } 
+  } = useForm<ProfileFormValues>({
+    defaultValues: {
+      username: user?.username ?? "",
+      email: user?.email ?? "",
+      bio: user?.bio ?? "",
+      avatarUrl: user?.avatarUrl ?? "",
+      role: user?.role === "CLIENT" || user?.role === "FREELANCER" ? user.role : "FREELANCER",
+      availabilityStatus: user?.availability === false ? "unavailable" : "available",
+      skills: user?.skills ?? [],
+    }
+  });
+
+  const { showModal, confirmLeave, cancelLeave } = useUnsavedChangesWarning(isDirty);
+
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string>("");
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [generalError, setGeneralError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isPageLoading, setIsPageLoading] = useState(!user);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
@@ -82,6 +117,7 @@ export default function SettingsPage() {
   const [regenerateTotp, setRegenerateTotp] = useState("");
   const [twoFALoading, setTwoFALoading] = useState(false);
   const [copiedRecovery, setCopiedRecovery] = useState(false);
+  const [walletLoading, setWalletLoading] = useState(false);
 
   // ─── Portfolio State ─────────────────────────────────────────────────────────
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
@@ -110,13 +146,21 @@ export default function SettingsPage() {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = res.data;
-        setUsername(data.username ?? "");
-        setEmail(data.email ?? "");
-        setBio(data.bio ?? "");
-        setAvatarUrl(data.avatarUrl ?? "");
-        setRole(data.role ?? "FREELANCER");
-        setSkills(data.skills ?? []);
+        reset({
+          username: data.username ?? "",
+          email: data.email ?? "",
+          bio: data.bio ?? "",
+          avatarUrl: data.avatarUrl ?? "",
+          role: data.role ?? "FREELANCER",
+          availabilityStatus: data.availability === false ? "unavailable" : "available",
+          skills: data.skills ?? [],
+        });
         setTwoFAEnabled(data.twoFactorEnabled ?? false);
+        updateUser({
+          walletAddress: data.walletAddress ?? null,
+          email: data.email ?? undefined,
+          authMethods: data.authMethods,
+        });
       } catch {
         if (!user) {
           toast.error("Failed to load profile data.");
@@ -281,55 +325,47 @@ export default function SettingsPage() {
 
   // ─── Profile Functions ──────────────────────────────────────────────────────
 
-  function validate(): boolean {
-    const newErrors: FormErrors = {};
-
-    if (!username || username.length < 3) {
-      newErrors.username = "Username must be at least 3 characters.";
-    } else if (username.length > 30) {
-      newErrors.username = "Username must be at most 30 characters.";
-    } else if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-      newErrors.username = "Username can only contain letters, numbers, hyphens, and underscores.";
-    }
-
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = "Please enter a valid email address.";
-    }
-
-    if (bio && bio.length > 500) {
-      newErrors.bio = "Bio must be at most 500 characters.";
-    }
-
-    if (avatarUrl && !/^https?:\/\/.+/.test(avatarUrl)) {
-      newErrors.avatarUrl = "Please enter a valid URL.";
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  }
-
-  function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
+    if (!AVATAR_MIME_TYPES.includes(file.type)) {
+      toast.error("Only JPG, PNG, GIF, or WebP images are allowed");
+      e.target.value = "";
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
       toast.error("Image must be less than 5MB");
+      setAvatarFile(null);
+      setAvatarPreview((prev) => {
+        if (prev.startsWith("blob:")) {
+          URL.revokeObjectURL(prev);
+        }
+        return "";
+      });
+      e.target.value = "";
       return;
     }
 
-    setAvatarFile(file);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setAvatarPreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-  }
+    try {
+      const resizedFile = await resizeImage(file, {
+        maxWidth: 400,
+        maxHeight: 400,
+        quality: 0.85,
+        mimeType: file.type === "image/png" ? "image/png" : "image/jpeg",
+      });
 
+      setAvatarFile(resizedFile);
+      const preview = await createImagePreview(resizedFile);
+      setAvatarPreview(preview);
+      // Reset so the same file can be re-selected (matches portfolio handler pattern).
+      e.target.value = "";
+    } catch (error) {
+      toast.error("Failed to process image. Please try another file.");
+      e.target.value = "";
+    }
+  }
   async function handleAvatarUpload() {
     if (!avatarFile || !token) return;
 
@@ -345,7 +381,7 @@ export default function SettingsPage() {
         },
       });
 
-      setAvatarUrl(res.data.avatarUrl);
+      setValue("avatarUrl", res.data.avatarUrl, { shouldDirty: true });
       updateUser({ avatarUrl: res.data.avatarUrl });
       setAvatarFile(null);
       setAvatarPreview("");
@@ -358,46 +394,22 @@ export default function SettingsPage() {
     }
   }
 
-  function addSkill() {
-    const trimmed = newSkill.trim();
-    if (!trimmed) return;
-
-    if (skills.includes(trimmed)) {
-      toast.error("Skill already added");
-      return;
-    }
-
-    if (skills.length >= 20) {
-      toast.error("Maximum 20 skills allowed");
-      return;
-    }
-
-    setSkills([...skills, trimmed]);
-    setNewSkill("");
-  }
-
-  function removeSkill(skill: string) {
-    setSkills(skills.filter((s) => s !== skill));
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!validate()) return;
-
+  const onSubmit = async (data: ProfileFormValues) => {
     setIsSaving(true);
-    setErrors({});
+    setGeneralError(null);
 
     try {
       const payload: Record<string, any> = { // eslint-disable-line @typescript-eslint/no-explicit-any
-        username,
-        role,
-        skills,
+        username: data.username,
+        role: data.role,
+        skills: data.skills,
+        availability: data.availabilityStatus !== "unavailable",
       };
-      if (email) payload.email = email;
+      if (data.email) payload.email = data.email;
       else payload.email = null;
-      if (bio) payload.bio = bio;
+      if (data.bio) payload.bio = data.bio;
       else payload.bio = null;
-      if (avatarUrl) payload.avatarUrl = avatarUrl;
+      if (data.avatarUrl) payload.avatarUrl = data.avatarUrl;
       else payload.avatarUrl = null;
 
       const res = await axios.put(`${API_URL}/users/me`, payload, {
@@ -405,16 +417,17 @@ export default function SettingsPage() {
       });
 
       updateUser(res.data);
+      reset(data);
       toast.success("Profile updated successfully!");
     } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
       const message =
         error.response?.data?.error || "Failed to update profile. Please try again.";
-      setErrors({ general: message });
+      setGeneralError(message);
       toast.error(message);
     } finally {
       setIsSaving(false);
     }
-  }
+  };
 
   if (authLoading || isPageLoading) {
     return (
@@ -499,6 +512,60 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleLinkWallet() {
+    if (!token || !user) return;
+    setWalletLoading(true);
+    try {
+      // Ensure a wallet is connected before starting the challenge flow
+      if (!address) {
+        const connected = await connect();
+        if (!connected) {
+          toast.error("Select a wallet to link.");
+          return;
+        }
+      }
+
+      // Challenge-response: fetch nonce → sign with wallet → verify on server
+      const result = await bindWallet(token);
+      if (!result.success) {
+        toast.error(result.error ?? "Failed to link wallet.");
+        return;
+      }
+
+      // Store the refreshed JWT (now carries a verified walletAddress claim)
+      if (result.token) {
+        localStorage.setItem("stellarmarket_jwt", result.token);
+      }
+
+      // Sync user state so the UI reflects the newly bound address
+      await refreshUser();
+      toast.success("Wallet linked.");
+    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      toast.error(error?.message ?? "Failed to link wallet.");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
+  async function handleUnlinkWallet() {
+    if (!token) return;
+    const confirmed = window.confirm("Unlink this wallet from your account?");
+    if (!confirmed) return;
+
+    setWalletLoading(true);
+    try {
+      const res = await axios.delete(`${API_URL}/auth/wallet/link`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      updateUser(res.data.user);
+      toast.success("Wallet unlinked.");
+    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      toast.error(error.response?.data?.error || "Failed to unlink wallet.");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
   function copyRecoveryCodes() {
     if (recoveryCodesPending?.length) {
       navigator.clipboard.writeText(recoveryCodesPending.join("\n"));
@@ -548,12 +615,12 @@ export default function SettingsPage() {
 
         {/* Profile Tab */}
         {activeSettingsTab === "profile" && (
-          <form onSubmit={handleSubmit} className="card space-y-6">
+          <form onSubmit={hookFormSubmit(onSubmit)} className="card space-y-6">
             <h2 className="text-xl font-semibold text-theme-heading">Edit Profile</h2>
 
-            {errors.general && (
+            {generalError && (
               <div className="bg-theme-error/10 border border-theme-error/20 text-theme-error rounded-lg px-4 py-3 text-sm">
-                {errors.general}
+                {generalError}
               </div>
             )}
 
@@ -568,15 +635,19 @@ export default function SettingsPage() {
               <input
                 id="username"
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                {...register("username", { 
+                  required: "Username is required", 
+                  minLength: { value: 3, message: "Username must be at least 3 characters." },
+                  maxLength: { value: 30, message: "Username must be at most 30 characters." },
+                  pattern: { value: /^[a-zA-Z0-9_-]+$/, message: "Username can only contain letters, numbers, hyphens, and underscores." }
+                })}
                 className="input-field"
                 placeholder="Your username"
-                aria-describedby={errors.username ? "username-error" : undefined}
+                aria-describedby={formErrors.username ? "username-error" : undefined}
               />
-              {errors.username && (
+              {formErrors.username && (
                 <p id="username-error" className="text-theme-error text-xs mt-1">
-                  {errors.username}
+                  {formErrors.username.message}
                 </p>
               )}
             </div>
@@ -592,15 +663,16 @@ export default function SettingsPage() {
               <input
                 id="email"
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                {...register("email", {
+                  pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Please enter a valid email address." }
+                })}
                 className="input-field"
                 placeholder="your@email.com"
-                aria-describedby={errors.email ? "email-error" : undefined}
+                aria-describedby={formErrors.email ? "email-error" : undefined}
               />
-              {errors.email && (
+              {formErrors.email && (
                 <p id="email-error" className="text-theme-error text-xs mt-1">
-                  {errors.email}
+                  {formErrors.email.message}
                 </p>
               )}
             </div>
@@ -615,23 +687,23 @@ export default function SettingsPage() {
               </label>
               <textarea
                 id="bio"
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
+                {...register("bio", {
+                  maxLength: { value: 500, message: "Bio must be at most 500 characters." }
+                })}
                 className="input-field min-h-[120px] resize-y"
                 placeholder="Tell us about yourself..."
-                maxLength={500}
-                aria-describedby={errors.bio ? "bio-error" : "bio-count"}
+                aria-describedby={formErrors.bio ? "bio-error" : "bio-count"}
               />
               <div className="flex justify-between mt-1">
-                {errors.bio ? (
+                {formErrors.bio ? (
                   <p id="bio-error" className="text-theme-error text-xs">
-                    {errors.bio}
+                    {formErrors.bio.message}
                   </p>
                 ) : (
                   <span />
                 )}
                 <span id="bio-count" className="text-theme-text text-xs">
-                  {bio.length}/500
+                  {(watch("bio") || "").length}/500
                 </span>
               </div>
             </div>
@@ -647,29 +719,25 @@ export default function SettingsPage() {
               <input
                 id="avatarUrl"
                 type="url"
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
+                {...register("avatarUrl", {
+                  pattern: { value: /^https?:\/\/.+/, message: "Please enter a valid URL." }
+                })}
                 className="input-field"
                 placeholder="https://example.com/avatar.png"
-                aria-describedby={errors.avatarUrl ? "avatar-error" : undefined}
+                aria-describedby={formErrors.avatarUrl ? "avatar-error" : undefined}
               />
-              {errors.avatarUrl && (
+              {formErrors.avatarUrl && (
                 <p id="avatar-error" className="text-theme-error text-xs mt-1">
-                  {errors.avatarUrl}
+                  {formErrors.avatarUrl.message}
                 </p>
               )}
-              {avatarUrl && !errors.avatarUrl && (
+              {watch("avatarUrl") && !formErrors.avatarUrl && (
                 <div className="mt-3 flex items-center gap-3">
-                  <Image
-                    src={avatarUrl}
+                  <Avatar
+                    src={watch("avatarUrl")}
                     alt="Avatar preview"
-                    width={48}
-                    height={48}
-                    className="w-12 h-12 rounded-full object-cover border border-theme-border"
+                    size={48}
                     unoptimized
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = "none";
-                    }}
                   />
                   <span className="text-theme-text text-xs">Preview</span>
                 </div>
@@ -687,7 +755,7 @@ export default function SettingsPage() {
               <div className="flex items-center gap-4">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
                   onChange={handleAvatarFileChange}
                   className="hidden"
                   id="avatar-upload"
@@ -722,19 +790,17 @@ export default function SettingsPage() {
               </div>
               {avatarPreview && (
                 <div className="mt-3 flex items-center gap-3">
-                  <Image
+                  <Avatar
                     src={avatarPreview}
                     alt="Avatar preview"
-                    width={48}
-                    height={48}
-                    className="w-12 h-12 rounded-full object-cover border border-theme-border"
+                    size={48}
                     unoptimized
                   />
                   <span className="text-theme-text text-xs">Preview</span>
                 </div>
               )}
               <p className="text-theme-text text-xs mt-2">
-                Max file size: 5MB. Supported formats: JPG, PNG, GIF
+                Max file size: 5MB. Supported formats: JPG, PNG, GIF, WebP
               </p>
             </div>
 
@@ -743,54 +809,15 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-theme-heading mb-2">
                 Skills
               </label>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="text"
-                  value={newSkill}
-                  onChange={(e) => setNewSkill(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addSkill();
-                    }
-                  }}
-                  className="input-field flex-1"
-                  placeholder="Add a skill (e.g., React, Node.js)"
-                  maxLength={50}
-                />
-                <button
-                  type="button"
-                  onClick={addSkill}
-                  className="btn-secondary flex items-center gap-2 text-sm"
-                >
-                  <Plus size={16} />
-                  Add
-                </button>
-              </div>
-              {skills.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {skills.map((skill, idx) => (
-                    <span
-                      key={idx}
-                      className="px-3 py-1.5 bg-theme-card border border-theme-border rounded-full text-sm text-theme-text flex items-center gap-2"
-                    >
-                      {skill}
-                      <button
-                        type="button"
-                        onClick={() => removeSkill(skill)}
-                        className="text-theme-error hover:text-theme-error/80"
-                        aria-label={`Remove ${skill}`}
-                      >
-                        <X size={14} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-theme-text text-sm">No skills added yet</p>
-              )}
-              {errors.skills && (
-                <p className="text-theme-error text-xs mt-1">{errors.skills}</p>
+              <Controller
+                name="skills"
+                control={control}
+                render={({ field }) => (
+                  <SkillCombobox skills={field.value} onChange={field.onChange} />
+                )}
+              />
+              {watch("skills").length === 0 && (
+                <p className="text-theme-text text-sm mt-3">No skills added yet</p>
               )}
             </div>
 
@@ -802,30 +829,66 @@ export default function SettingsPage() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setRole("CLIENT")}
+                  onClick={() => setValue("role", "CLIENT", { shouldDirty: true })}
                   className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
-                    role === "CLIENT"
+                    watch("role") === "CLIENT"
                       ? "bg-stellar-blue/20 border-stellar-blue text-stellar-blue"
                       : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
                   }`}
-                  aria-pressed={role === "CLIENT"}
+                  aria-pressed={watch("role") === "CLIENT"}
                 >
                   Client
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRole("FREELANCER")}
+                  onClick={() => setValue("role", "FREELANCER", { shouldDirty: true })}
                   className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
-                    role === "FREELANCER"
+                    watch("role") === "FREELANCER"
                       ? "bg-stellar-purple/20 border-stellar-purple text-stellar-purple"
                       : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
                   }`}
-                  aria-pressed={role === "FREELANCER"}
+                  aria-pressed={watch("role") === "FREELANCER"}
                 >
                   Freelancer
                 </button>
               </div>
             </div>
+
+            {/* Availability Status (freelancers only) */}
+            {watch("role") === "FREELANCER" && (
+              <div>
+                <label className="block text-sm font-medium text-theme-heading mb-3">
+                  Availability Status
+                </label>
+                <div className="flex gap-3">
+                  {(["available", "busy", "unavailable"] as const).map((status) => {
+                    const config = {
+                      available: { label: "Available", active: "bg-green-500/20 border-green-500 text-green-600 dark:text-green-400" },
+                      busy: { label: "Busy", active: "bg-amber-400/20 border-amber-400 text-amber-600 dark:text-amber-400" },
+                      unavailable: { label: "Unavailable", active: "bg-gray-400/20 border-gray-400 text-gray-500" },
+                    }[status];
+                    return (
+                      <button
+                        key={status}
+                        type="button"
+                        onClick={() => setValue("availabilityStatus", status, { shouldDirty: true })}
+                        className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
+                          watch("availabilityStatus") === status
+                            ? config.active
+                            : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
+                        }`}
+                        aria-pressed={watch("availabilityStatus") === status}
+                      >
+                        {config.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-theme-text mt-2">
+                  Clients can see your availability status on your profile and job applications.
+                </p>
+              </div>
+            )}
 
             {/* Submit */}
             <div className="flex justify-end pt-2">
@@ -847,21 +910,84 @@ export default function SettingsPage() {
           </form>
         )}
 
+        <UnsavedChangesModal 
+          isOpen={showModal} 
+          onConfirm={confirmLeave} 
+          onCancel={cancelLeave} 
+        />
+
         {/* Security Tab */}
         {activeSettingsTab === "security" && (
           <div className="card space-y-6">
-            <h2 className="text-xl font-semibold text-dark-heading flex items-center gap-2">
+            <h2 className="text-xl font-semibold text-theme-heading flex items-center gap-2">
               <ShieldCheck size={20} />
               Security
             </h2>
 
+            <div className="rounded-lg border border-theme-border bg-theme-bg p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-theme-heading">
+                    <Wallet size={16} />
+                    Authentication methods
+                  </h3>
+                  <p className="text-xs text-theme-text">Keep at least one sign-in method connected.</p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex flex-col gap-2 rounded-lg border border-theme-border bg-theme-card p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-theme-heading">Email</p>
+                    <p className="text-xs text-theme-text">
+                      {user?.authMethods?.email || user?.email ? user.email : "No email login linked"}
+                    </p>
+                  </div>
+                  <span className={`w-fit rounded-full border px-2.5 py-1 text-xs ${
+                    user?.authMethods?.email || user?.email
+                      ? "border-theme-success/30 bg-theme-success/10 text-theme-success"
+                      : "border-theme-warning/30 bg-theme-warning/10 text-theme-warning"
+                  }`}>
+                    {user?.authMethods?.email || user?.email ? "Linked" : "Not linked"}
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-3 rounded-lg border border-theme-border bg-theme-card p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-theme-heading">Wallet</p>
+                    <WalletAddress address={user?.walletAddress} className="mt-1" />
+                  </div>
+                  {user?.walletAddress ? (
+                    <button
+                      type="button"
+                      onClick={handleUnlinkWallet}
+                      disabled={walletLoading}
+                      className="w-fit rounded-lg border border-theme-error/50 px-3 py-2 text-sm text-theme-error hover:bg-theme-error/10 disabled:opacity-60"
+                    >
+                      {walletLoading ? "Updating..." : "Unlink"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleLinkWallet}
+                      disabled={walletLoading || isConnecting}
+                      className="btn-primary flex w-fit items-center gap-2 text-sm disabled:opacity-60"
+                    >
+                      {walletLoading || isConnecting ? <Loader2 size={14} className="animate-spin" /> : <Wallet size={14} />}
+                      Link wallet
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {recoveryCodesPending && recoveryCodesPending.length > 0 ? (
-              <div className="space-y-4 rounded-lg border border-amber-600/40 bg-amber-950/30 p-4">
-                <p className="text-amber-200 text-sm font-medium">
+              <div className="space-y-4 rounded-lg border border-theme-warning/40 bg-theme-warning/10 p-4">
+                <p className="text-theme-warning text-sm font-medium">
                   Save these recovery codes now. Each code works once instead of your authenticator at login. They will not be shown again.
                 </p>
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-dark-muted text-xs">Recovery codes</p>
+                  <p className="text-theme-text text-xs">Recovery codes</p>
                   <button
                     type="button"
                     onClick={copyRecoveryCodes}
@@ -875,7 +1001,7 @@ export default function SettingsPage() {
                   {recoveryCodesPending.map((code, i) => (
                     <code
                       key={i}
-                      className="block p-2 bg-dark-bg border border-dark-border rounded text-center text-sm text-dark-text font-mono"
+                      className="block p-2 bg-theme-bg border border-theme-border rounded text-center text-sm text-theme-text font-mono"
                     >
                       {code}
                     </code>
@@ -891,14 +1017,14 @@ export default function SettingsPage() {
               </div>
             ) : twoFAEnabled && !twoFASetupData ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 bg-green-900/20 border border-green-700/30 rounded-lg">
-                  <ShieldCheck size={20} className="text-green-400" />
-                  <p className="text-green-300 text-sm">Two-factor authentication is enabled.</p>
+                <div className="flex items-center gap-3 p-4 bg-theme-success/10 border border-theme-success/30 rounded-lg">
+                  <ShieldCheck size={20} className="text-theme-success" />
+                  <p className="text-theme-success text-sm">Two-factor authentication is enabled.</p>
                 </div>
 
                 {showRegenerateModal ? (
-                  <form onSubmit={handleRegenerateRecovery} className="space-y-3 rounded-lg border border-dark-border p-4">
-                    <p className="text-dark-muted text-sm">
+                  <form onSubmit={handleRegenerateRecovery} className="space-y-3 rounded-lg border border-theme-border p-4">
+                    <p className="text-theme-text text-sm">
                       Enter a 6-digit code from your authenticator. This replaces all existing recovery codes.
                     </p>
                     <input
@@ -923,7 +1049,7 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={() => { setShowRegenerateModal(false); setRegenerateTotp(""); }}
-                        className="px-4 py-2 border border-dark-border text-dark-text rounded-lg text-sm hover:bg-dark-bg transition-colors"
+                        className="px-4 py-2 border border-theme-border text-theme-text rounded-lg text-sm hover:bg-theme-bg transition-colors"
                       >
                         Cancel
                       </button>
@@ -931,7 +1057,7 @@ export default function SettingsPage() {
                   </form>
                 ) : showDisableModal ? (
                   <form onSubmit={handleDisable2FA} className="space-y-3">
-                    <p className="text-dark-muted text-sm">Enter your password to disable 2FA:</p>
+                    <p className="text-theme-text text-sm">Enter your password to disable 2FA:</p>
                     <input
                       type="password"
                       value={disablePassword}
@@ -944,7 +1070,7 @@ export default function SettingsPage() {
                       <button
                         type="submit"
                         disabled={twoFALoading}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                        className="flex items-center gap-2 px-4 py-2 bg-theme-error hover:bg-theme-error/80 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                       >
                         {twoFALoading ? <Loader2 size={14} className="animate-spin" /> : <ShieldOff size={14} />}
                         Confirm Disable
@@ -952,7 +1078,7 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={() => { setShowDisableModal(false); setDisablePassword(""); }}
-                        className="px-4 py-2 border border-dark-border text-dark-text rounded-lg text-sm hover:bg-dark-bg transition-colors"
+                        className="px-4 py-2 border border-theme-border text-theme-text rounded-lg text-sm hover:bg-theme-bg transition-colors"
                       >
                         Cancel
                       </button>
@@ -971,7 +1097,7 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       onClick={() => setShowDisableModal(true)}
-                      className="flex items-center gap-2 px-4 py-2 border border-red-600/50 text-red-400 rounded-lg text-sm hover:bg-red-900/20 transition-colors"
+                      className="flex items-center gap-2 px-4 py-2 border border-theme-error/50 text-theme-error rounded-lg text-sm hover:bg-theme-error/10 transition-colors"
                     >
                       <ShieldOff size={14} />
                       Disable 2FA
@@ -982,29 +1108,29 @@ export default function SettingsPage() {
             ) : twoFASetupData ? (
               <div className="space-y-6">
                 <div className="text-center">
-                  <p className="text-dark-muted text-sm mb-4">
+                  <p className="text-theme-text text-sm mb-4">
                     Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
                   </p>
                   <img
                     src={twoFASetupData.qrCode}
                     alt="2FA QR Code"
-                    className="mx-auto w-48 h-48 rounded-lg border border-dark-border"
+                    className="mx-auto w-48 h-48 rounded-lg border border-theme-border"
                   />
                 </div>
 
                 <div>
-                  <p className="text-dark-muted text-xs mb-1">Manual entry key:</p>
-                  <code className="block p-2 bg-dark-bg border border-dark-border rounded text-sm text-dark-text break-all">
+                  <p className="text-theme-text text-xs mb-1">Manual entry key:</p>
+                  <code className="block p-2 bg-theme-bg border border-theme-border rounded text-sm text-theme-text break-all">
                     {twoFASetupData.secret}
                   </code>
                 </div>
 
-                <p className="text-dark-muted text-xs">
+                <p className="text-theme-text text-xs">
                   After you verify with a 6-digit app code, you will receive one-time recovery codes to download or copy. Store them offline.
                 </p>
 
                 <form onSubmit={handleVerify2FA} className="space-y-3">
-                  <label className="block text-sm font-medium text-dark-heading">
+                  <label className="block text-sm font-medium text-theme-heading">
                     Enter a code from your authenticator app to verify:
                   </label>
                   <input
@@ -1029,7 +1155,7 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       onClick={() => { setTwoFASetupData(null); setVerifyCode(""); }}
-                      className="px-4 py-2 border border-dark-border text-dark-text rounded-lg text-sm hover:bg-dark-bg transition-colors"
+                      className="px-4 py-2 border border-theme-border text-theme-text rounded-lg text-sm hover:bg-theme-bg transition-colors"
                     >
                       Cancel
                     </button>
@@ -1038,7 +1164,7 @@ export default function SettingsPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                <p className="text-dark-muted text-sm">
+                <p className="text-theme-text text-sm">
                   Add an extra layer of security to your account by enabling two-factor authentication with an authenticator app.
                 </p>
                 <button
@@ -1182,7 +1308,7 @@ export default function SettingsPage() {
                           <button
                             type="button"
                             onClick={() => handlePortfolioDelete(item.id)}
-                            className="p-1.5 text-theme-text hover:text-red-400 transition-colors rounded"
+                            className="p-1.5 text-theme-text hover:text-theme-error transition-colors rounded"
                             title="Delete"
                           >
                             <Trash2 size={15} />

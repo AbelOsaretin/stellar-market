@@ -7,8 +7,9 @@ import { Star, Tag, Clock, ChevronLeft, MessageSquare, ShieldCheck } from "lucid
 import axios from "axios";
 import { ServiceListing } from "@/types";
 import ShareMenu from "@/components/ShareMenu";
+import Avatar from "@/components/Avatar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 export default function ServiceDetailPage() {
   const { id } = useParams();
@@ -49,7 +50,7 @@ export default function ServiceDetailPage() {
     );
   }
 
-  const averageRating = service.freelancer.averageRating || 0;
+  const averageRating = (service.freelancer.averageRating || 0).toFixed(1);
   const reviewCount = service.freelancer.reviewCount || 0;
 
   return (
@@ -72,7 +73,7 @@ export default function ServiceDetailPage() {
               {service.title}
             </h1>
             <div className="flex items-center gap-6 text-sm text-theme-text">
-              <div className="flex items-center gap-1 text-yellow-500">
+              <div className="flex items-center gap-1 text-theme-warning">
                 <Star size={18} fill="currentColor" />
                 <span className="text-base font-semibold text-theme-heading">{averageRating}</span>
                 <span className="text-sm text-theme-text">({reviewCount} reviews)</span>
@@ -83,7 +84,7 @@ export default function ServiceDetailPage() {
               </div>
               <ShareMenu 
                 title={service.title}
-                url={typeof window !== "undefined" ? window.location.href : ""}
+                url={`/services/${id}`}
                 description={service.description.slice(0, 140)}
               />
             </div>
@@ -121,7 +122,7 @@ export default function ServiceDetailPage() {
 
             <div className="space-y-4 mb-8">
               <div className="flex items-center gap-3 text-sm text-theme-text">
-                <ShieldCheck size={18} className="text-green-400" />
+                <ShieldCheck size={18} className="text-theme-success" />
                 <span>Secure Stellar Payment</span>
               </div>
               <div className="flex items-center gap-3 text-sm text-theme-text">
@@ -130,8 +131,8 @@ export default function ServiceDetailPage() {
               </div>
             </div>
 
-            <button 
-              onClick={() => router.push(`/messages?recipientId=${service.freelancerId}`)}
+            <button
+              onClick={() => router.push(`/messages/${service.freelancerId}-no-job`)}
               className="btn-primary w-full flex items-center justify-center gap-2 h-12"
             >
               Contact Freelancer <MessageSquare size={20} />
@@ -141,7 +142,11 @@ export default function ServiceDetailPage() {
           <div className="card">
             <h3 className="text-lg font-bold text-theme-heading mb-4">About the Seller</h3>
             <div className="flex items-center gap-4 mb-4">
-              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple" />
+              <Avatar
+                src={service.freelancer.avatarUrl}
+                alt={service.freelancer.username}
+                size={56}
+              />
               <div>
                 <div className="font-bold text-theme-heading">{service.freelancer.username}</div>
                 <div className="text-sm text-theme-text">{service.freelancer.role}</div>
