@@ -561,22 +561,25 @@ router.get(
       prisma.user.count({ where }),
     ]);
 
-    const usersWithReputation = await Promise.all(
-      users.map(async (user) => {
-        if (user.role === "FREELANCER" && user.walletAddress) {
-          const reputation = await ReputationCacheService.getCachedReputation(user.walletAddress);
-          return {
-            ...user,
-            reputation: reputation ? {
-              totalScore: reputation.score.toString(),
-              totalWeight: reputation.endorsementWeight.toString(),
-              reviewCount: 0,
-            } : null,
-          };
-        }
-        return user;
-      })
-    );
+    const freelancerAddresses = users
+      .filter((u) => u.role === "FREELANCER" && u.walletAddress)
+      .map((u) => u.walletAddress!);
+    const reputationMap = await ReputationCacheService.getBatchCachedReputation(freelancerAddresses);
+
+    const usersWithReputation = users.map((user) => {
+      if (user.role === "FREELANCER" && user.walletAddress) {
+        const reputation = reputationMap.get(user.walletAddress) ?? null;
+        return {
+          ...user,
+          reputation: reputation ? {
+            totalScore: reputation.score.toString(),
+            totalWeight: reputation.endorsementWeight.toString(),
+            reviewCount: 0,
+          } : null,
+        };
+      }
+      return user;
+    });
 
     res.json({
       users: usersWithReputation,
