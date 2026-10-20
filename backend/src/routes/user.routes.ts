@@ -173,8 +173,8 @@ router.post(
       }
 
       const originalPath = req.file.path;
-      const ext = path.extname(req.file.filename);
-      const processedFilename = `avatar-${Date.now()}-processed${ext}`;
+      
+      const processedFilename = `avatar-${Date.now()}-processed.jpg`;
       const processedPath = path.join(AVATAR_UPLOAD_DIR, processedFilename);
 
       try {
