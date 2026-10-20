@@ -359,8 +359,11 @@ export default function SettingsPage() {
       setAvatarFile(resizedFile);
       const preview = await createImagePreview(resizedFile);
       setAvatarPreview(preview);
+      // Reset so the same file can be re-selected (matches portfolio handler pattern).
+      e.target.value = "";
     } catch (error) {
       toast.error("Failed to process image. Please try another file.");
+      e.target.value = "";
     }
   }
   async function handleAvatarUpload() {
