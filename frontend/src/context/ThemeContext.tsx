@@ -32,8 +32,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const initialTheme = savedTheme || systemTheme;
     setTheme(initialTheme);
     document.documentElement.setAttribute("data-theme", initialTheme);
-    // Remove the default 'dark' class if present to favor data-theme
-    document.documentElement.classList.remove("dark");
+    // Keep the 'dark' class in sync with the resolved theme so Tailwind
+    // dark-mode utilities work regardless of which strategy is active (#1615).
+    document.documentElement.classList.toggle("dark", initialTheme === "dark");
   }, []);
 
   const toggleTheme = () => {
@@ -41,6 +42,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setTheme(newTheme);
     localStorage.setItem("stellar-market-theme", newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
+    document.documentElement.classList.toggle("dark", newTheme === "dark");
   };
 
   return (
