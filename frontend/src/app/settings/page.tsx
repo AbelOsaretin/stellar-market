@@ -26,7 +26,6 @@ import {
   Copy,
   Check,
   Upload,
-  X,
   Plus,
   ImageIcon,
   GripVertical,

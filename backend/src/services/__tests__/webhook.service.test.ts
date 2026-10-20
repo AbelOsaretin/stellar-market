@@ -158,11 +158,44 @@ describe("WebhookService — HMAC-SHA256 signature (#463)", () => {
   it("does not deliver when max attempts reached", async () => {
     mockFindUnique.mockResolvedValue({
       ...mockDelivery,
-      attempts: 3, // MAX_ATTEMPTS
+      attempts: 4, // MAX_ATTEMPTS: 1 initial attempt + 3 retries
     });
 
     await WebhookService.deliver("del-1");
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("WebhookService — retry policy", () => {
+  const start = new Date("2024-01-01T00:00:00Z");
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    jest.setSystemTime(start);
+    mockFetch.mockResolvedValue({ ok: false, status: 500 });
+    mockUpdate.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("makes 4 attempts total and uses every configured retry delay before marking failed", async () => {
+    for (let attempts = 0; attempts < 4; attempts++) {
+      mockFindUnique.mockResolvedValueOnce({ ...mockDelivery, attempts });
+      await WebhookService.deliver("del-1");
+    }
+
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+
+    const updates = mockUpdate.mock.calls.map(([arg]) => arg.data);
+    expect(updates.map((d) => d.status)).toEqual(["pending", "pending", "pending", "failed"]);
+
+    const retryDelays = updates.slice(0, 3).map((d) => d.nextRetry.getTime() - start.getTime());
+    expect(retryDelays).toEqual([30_000, 120_000, 600_000]);
+
+    expect(updates[3].nextRetry).toBeNull();
   });
 });
 

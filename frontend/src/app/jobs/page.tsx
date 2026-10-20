@@ -16,7 +16,7 @@ import {
   type ListImperativeAPI,
   type RowComponentProps,
 } from "react-window";
-import { Search, SlidersHorizontal, Briefcase, Loader2, Wifi, ArrowUp, X } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2, Wifi, ArrowUp, X } from "lucide-react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import axios from "axios";
 import JobCard from "@/components/JobCard";
