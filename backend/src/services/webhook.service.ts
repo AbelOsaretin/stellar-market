@@ -7,8 +7,9 @@ const prisma = new PrismaClient();
 const SUPPORTED_EVENTS = ["job.status_changed", "milestone.approved"] as const;
 export type WebhookEvent = (typeof SUPPORTED_EVENTS)[number];
 
-const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [30_000, 120_000, 600_000]; // 30s, 2min, 10min
+// One initial attempt plus one retry per configured delay, so every delay is reachable.
+const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 
 function signPayload(secret: string, body: string): string {
   return crypto.createHmac("sha256", secret).update(body).digest("hex");
