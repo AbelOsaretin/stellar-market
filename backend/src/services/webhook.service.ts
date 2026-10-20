@@ -64,8 +64,18 @@ export class WebhookService {
 
   /**
    * Attempts to deliver a single WebhookDelivery record, retrying with exponential backoff.
+   * Never rejects: callers fire this without awaiting, so any failure (including DB errors)
+   * is logged here instead of surfacing as an unhandled promise rejection.
    */
   static async deliver(deliveryId: string): Promise<void> {
+    try {
+      await this.attemptDelivery(deliveryId);
+    } catch (err) {
+      logger.error({ err, deliveryId }, "Webhook delivery failed unexpectedly");
+    }
+  }
+
+  private static async attemptDelivery(deliveryId: string): Promise<void> {
     const delivery = await prisma.webhookDelivery.findUnique({
       where: { id: deliveryId },
       include: { webhook: true },
