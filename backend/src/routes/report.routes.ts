@@ -181,13 +181,21 @@ router.post(
       });
 
       if (pendingCount >= AUTO_FLAG_THRESHOLD) {
-        await prisma.user.update({
-          where: { id: targetId },
-          data: {
-            isFlagged: true,
-            flagReason: `Auto-flagged: ${pendingCount} pending community reports`,
-          },
-        });
+        try {
+          await prisma.user.update({
+            where: { id: targetId },
+            data: {
+              isFlagged: true,
+              flagReason: `Auto-flagged: ${pendingCount} pending community reports`,
+            },
+          });
+        } catch (error) {
+          // User doesn't exist - report is still valid, just skip auto-flag
+          // The report creation has already succeeded, so we log and continue
+          logger.warn(
+            `[ReportRoute] Unable to auto-flag non-existent user ${targetId}`,
+          );
+        }
       }
     }
 
